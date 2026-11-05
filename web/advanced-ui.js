@@ -20,7 +20,7 @@ async function shareFile(blob,name){
   }
   deliverBlob(blob,name);
 }
-export default function installEnhancements({S,call,render,openGroup}){
+export default function installEnhancements({S,call,render,openGroup,modalBack}){
   const root=document.getElementById('app');
   let items=[],modal=null,receiptName='Чек по позициям';
   function deco(){
@@ -176,7 +176,7 @@ export default function installEnhancements({S,call,render,openGroup}){
     }else if(e.target.id==='adv-fee'){try{recalc();}catch(err){alertUser(err.message);}}
   },true);
   const extras=installGroupExtras({S,call,render,openGroup});
-  const next=installNext({S,call,render,openGroup});
+  const next=installNext({S,call,render,openGroup,modalBack});
   const analytics=installAnalytics({S});
   const ai=installAiUI({S,call,onReceipt:draft=>openSplitter(draft)});
   const voice=installVoice({S,call});

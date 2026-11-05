@@ -112,3 +112,75 @@
 .expense-tools-content { display: grid; gap: 12px; }
 .field[hidden] { display: none; }
 h1[tabindex='-1']:focus { outline: none; }
+
+/* UX redesign: entry-mode switcher (demo), theme toggle, states. */
+.entry-switch{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--app-soft);border:1px solid var(--border);border-radius:13px;padding:8px 10px;margin:0 0 14px}
+.entry-switch>span{font-size:12px;font-weight:750;color:var(--muted)}
+.entry-btn{border:0;background:transparent;color:var(--muted);font-weight:750;font-size:12px;padding:9px 12px;border-radius:9px;min-height:36px}
+.entry-btn.active{background:var(--white);color:var(--brand);box-shadow:0 2px 8px #2d399019}
+.theme-toggle{flex:none;min-width:40px;min-height:40px;padding:8px 10px}
+.form-error{margin:0}
+.empty p{margin:0 0 14px}
+.empty .btn{margin-top:2px}
+@media (max-width: 360px) {
+  .summary .metric strong{font-size:17px}
+  .group-primary{flex-direction:column}
+  .group-primary>.btn{width:100%}
+  .entry-switch{gap:6px;padding:6px 8px}
+  .entry-btn{flex:1;padding:9px 4px}
+}
+
+/* Second pass (round 2): settle modal, balance addressee, error toasts. */
+.settle-route{font-size:17px;margin:0}
+.settle-amount{font-size:28px;font-weight:800;margin:0;font-variant-numeric:tabular-nums}
+.settle-sbp{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:#f0f4fb;border:1px solid #dae3f0;border-radius:10px;padding:10px 12px;font-weight:700}
+.settle-sbp .btn{flex:none}
+/* Round 6: the SBP number never breaks mid-way (overflow-wrap:anywhere
+   removed); if the copy button does not fit beside it, it wraps to its
+   own line instead of squeezing the number. */
+.settle-sbp>span{white-space:nowrap}
+.settle-panel .form-hint{font-size:13px;color:#5a6b84}
+.metric .btn{margin-top:10px}
+.allocation-total{margin:8px 0 0;padding-top:8px;border-top:1px solid var(--border);font-size:13px;font-weight:700}
+.allocation-total.error{color:var(--bad)}
+.toast.error{pointer-events:auto;cursor:pointer}
+.toast-close{margin-left:10px;font-weight:800}
+/* Round 3: precise save status in the expense form. */
+.save-status p{margin:8px 0}
+.save-status .actions{margin-top:10px}
+.spliit-kb-open .footbar{display:none}
+.spliit-kb-open .page{padding-bottom:calc(32px + env(safe-area-inset-bottom,0px))}
+
+/* Round 4: three-screen mockup — compact history list (Kobbe), invite hero,
+   settle modal motion. */
+.amount{font-variant-numeric:tabular-nums}
+.allocation-preview li strong{font-variant-numeric:tabular-nums}
+.expense-list{background:var(--white);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+.expense-list .expense{margin-bottom:0;padding:12px 14px}
+.expense-list .expense+.expense{border-top:1px solid var(--border)}
+.expense-list .expense-icon{width:36px;height:36px;font-size:18px}
+.btn{transition:filter .13s,transform .1s}
+.btn:active{transform:scale(.98);filter:brightness(.94)}
+@keyframes settle-in{from{opacity:0}to{opacity:1}}
+@keyframes settle-panel-in{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+.settle-modal{animation:settle-in .18s ease-out}
+.settle-modal .advanced-panel{animation:settle-panel-in .18s ease-out}
+@media (prefers-reduced-motion:reduce){.settle-modal,.settle-modal .advanced-panel{animation:none}.btn{transition:none}}
+.invite-screen{background:radial-gradient(120% 70% at 12% 0%,#cfe0ff 0%,transparent 55%),radial-gradient(90% 60% at 92% 8%,#c8f2e0 0%,transparent 55%),radial-gradient(130% 90% at 50% 115%,#e6efff 0%,transparent 60%),linear-gradient(180deg,#f3f7ff,#eef3fb)}
+.tg-dark .invite-screen{background:radial-gradient(120% 70% at 12% 0%,#1d3355 0%,transparent 55%),radial-gradient(90% 60% at 92% 8%,#173a30 0%,transparent 55%),radial-gradient(130% 90% at 50% 115%,#16283f 0%,transparent 60%),linear-gradient(180deg,#131c28,#101825)}
+.invite-hero-text{padding:14px 2px 20px}
+.invite-group{font-size:31px;line-height:1.13;letter-spacing:-1.2px;margin:10px 0 8px}
+.invite-by{margin:0;color:var(--muted);font-size:14px}
+.invite-card{display:grid;gap:14px}
+.invite-points{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.invite-points li{display:flex;gap:10px;font-size:14px;line-height:1.45}
+.invite-points li::before{content:'✓';color:var(--good);font-weight:800;flex:none}
+.invite-meta{display:flex;gap:8px;flex-wrap:wrap}
+.invite-meta span{background:var(--app-soft);border-radius:99px;padding:5px 11px;font-size:12px;font-weight:750;color:var(--muted)}
+/* Round 5: nowrap sums, themed settle modal. */
+.sum{white-space:nowrap}
+.advanced-panel{background:var(--white);color:var(--ink)}
+.advanced-modal{color:var(--ink)}
+.settle-sbp{background:var(--app-soft);border-color:var(--border)}
+.settle-panel .form-hint{color:var(--muted)}
+.invite-note{text-align:center}
