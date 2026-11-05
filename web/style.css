@@ -133,8 +133,12 @@ h1[tabindex='-1']:focus { outline: none; }
 /* Second pass (round 2): settle modal, balance addressee, error toasts. */
 .settle-route{font-size:17px;margin:0}
 .settle-amount{font-size:28px;font-weight:800;margin:0;font-variant-numeric:tabular-nums}
-.settle-sbp{display:flex;align-items:center;justify-content:space-between;gap:10px;background:#f0f4fb;border:1px solid #dae3f0;border-radius:10px;padding:10px 12px;font-weight:700;overflow-wrap:anywhere}
+.settle-sbp{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;background:#f0f4fb;border:1px solid #dae3f0;border-radius:10px;padding:10px 12px;font-weight:700}
 .settle-sbp .btn{flex:none}
+/* Round 6: the SBP number never breaks mid-way (overflow-wrap:anywhere
+   removed); if the copy button does not fit beside it, it wraps to its
+   own line instead of squeezing the number. */
+.settle-sbp>span{white-space:nowrap}
 .settle-panel .form-hint{font-size:13px;color:#5a6b84}
 .metric .btn{margin-top:10px}
 .allocation-total{margin:8px 0 0;padding-top:8px;border-top:1px solid var(--border);font-size:13px;font-weight:700}
