@@ -18,10 +18,10 @@ try{if(lsGet('spliit.demoTheme')==='dark')document.documentElement.classList.add
 const CURRENCIES=['RUB','USD','EUR','CNY','TRY','THB','AED','KZT','GEL','AMD'];
 const CURRENCY={RUB:'₽',USD:'$',EUR:'€',CNY:'¥',TRY:'₺',THB:'฿',AED:'د.إ',KZT:'₸',GEL:'₾',AMD:'֏'};
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const money=(v,code='RUB')=>(Number(v||0)/100).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+(CURRENCY[code]||code);
+const money=(v,code='RUB')=>(Number(v||0)/100).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+(CURRENCY[code]||code);
 // Signed amounts: debts are distinguished by words AND by the sign of the
 // sum (outgoing "−", incoming "+"). Zero is neutral — never green/red.
-const signedMoney=(v,code='RUB')=>{const n=Number(v||0);const abs=(Math.abs(n)/100).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2});return (n<0?'−':n>0?'+':'')+abs+' '+(CURRENCY[code]||code)};
+const signedMoney=(v,code='RUB')=>{const n=Number(v||0);const abs=(Math.abs(n)/100).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2});return (n<0?'−':n>0?'+':'')+abs+' '+(CURRENCY[code]||code)};
 // Russian plural for "перевод": 1 перевод, 2–4 перевода, 5+ переводов.
 const transferWord=n=>{const m=n%10,h=n%100;if(m===1&&h!==11)return 'перевод';if((m===2||m===3||m===4)&&h!==12&&h!==13&&h!==14)return 'перевода';return 'переводов';};
 const betaFree=()=>S.boot?.features?.betaFree===true;
@@ -159,7 +159,7 @@ function renderExpenses(d){return d.expenses.length?`<div class="expense-list">$
  const count=(e.paidFor||[]).filter(p=>p.shares>0).length;
  let shareLine='';
  if(e.isReimbursement)shareLine='<small>Возврат долга</small>';
- else{const mine=myShare(d,e);if(mine!==undefined)shareLine=`<small>На ${count} чел. · Ваша доля: ${money(mine,d.group.currencyCode)}</small>`;}
+ else{const mine=myShare(d,e);if(mine!==undefined)shareLine=`<small>На ${count} чел. · Ваша доля: <span class="sum">${money(mine,d.group.currencyCode)}</span></small>`;}
  return `<div class="expense expense-row"><div class="expense-icon">${e.isReimbursement?'⇄':'◈'}</div><div style="flex:1;min-width:0"><strong>${esc(e.title)}</strong><small>${esc(payer)} · ${fmtDate(e.expenseDate)}</small>${shareLine}</div><div class="amount">${money(e.amount,d.group.currencyCode)}${(e.createdByTgId===S.boot?.user?.id||d.isCreator)?`<div><button class="btn small ghost" data-action="${e.isReimbursement?'deleteExpenseDirect':'editExpense'}" data-id="${esc(e.id)}">${e.isReimbursement?'Удалить':'Изменить'}</button></div>`:''}</div></div>`}).join('')}</div>`:'<div class="card empty"><p>Расходов пока нет. Добавьте первый чек — Spleet сразу посчитает доли.</p><button class="btn primary" data-action="expense">Добавить первую трату</button></div>';}
 function renderBalances(data){
  const transfers=data.settlements||[];

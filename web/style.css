@@ -173,4 +173,10 @@ h1[tabindex='-1']:focus { outline: none; }
 .invite-points li::before{content:'✓';color:var(--good);font-weight:800;flex:none}
 .invite-meta{display:flex;gap:8px;flex-wrap:wrap}
 .invite-meta span{background:var(--app-soft);border-radius:99px;padding:5px 11px;font-size:12px;font-weight:750;color:var(--muted)}
+/* Round 5: nowrap sums, themed settle modal. */
+.sum{white-space:nowrap}
+.advanced-panel{background:var(--white);color:var(--ink)}
+.advanced-modal{color:var(--ink)}
+.settle-sbp{background:var(--app-soft);border-color:var(--border)}
+.settle-panel .form-hint{color:var(--muted)}
 .invite-note{text-align:center}
