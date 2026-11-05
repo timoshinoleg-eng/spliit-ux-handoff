@@ -490,8 +490,15 @@ root.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(!
    if(found){
     // An edit reuses an existing ID, so "found" alone proves nothing:
     // the stored record may be the OLD version (the edit never arrived).
-    // Confirm the submitted changes, not just the ID.
-    if(!expenseMatchesPayload(found,u)){showExpenseSaveStatus({kind:'lostStale',payload:u});throw handledError();}
+    // Confirm the submitted changes, not just the ID. A missing field
+    // in the answer is unconfirmed too, never a match (see
+    // expenseMatchDetail).
+    const detail=expenseMatchDetail(found,u);
+    if(!detail.ok){
+     if(detail.missing.length)showExpenseSaveStatus({kind:'lostUnverifiable',payload:u,missing:detail.missing});
+     else showExpenseSaveStatus({kind:'lostStale',payload:u});
+     throw handledError();
+    }
     S.uncheckedExpense=null;S.edit=null;S.newExpenseId=null;
     S.group=data;S.groupId=u.groupId;S.page='group';S.tab='expenses';
     await refreshPending();
@@ -556,33 +563,89 @@ root.addEventListener('change',event=>{
  if(input.id==='e-mode'||input.name==='participant')updateSplitControls(input.id==='e-mode');
  else updateExpensePreview();
 });
-// Precise save status for the expense form. Four cases, four texts:
+// Precise save status for the expense form. Five cases, five texts:
 // - rejected: local validation or the server refused with a reason;
 // - lost: the network broke mid-request, the result is unknown;
 // - lostStale: the check found the record, but it is the OLD version —
-//   the submitted edit is not confirmed (see expenseMatchesPayload);
+//   the submitted edit is not confirmed (see expenseMatchDetail);
+// - lostUnverifiable: the check found the record, but the answer lacks
+//   a field the confirmation needs (see expenseMatchDetail) — the
+//   result stays unconfirmed, never a success.
 // - confirmed-but-stale: the record is saved, the list failed to reload
 //   (handled in the submit flow via S.saveConfirmed, not here).
 // The panel names the concrete expense, keeps the form fields, and — for
 // the lost case — offers a way to check the result with the same expense ID.
-// Does the stored record match the submitted edit? Compares the fields
-// that define the edit in the stored shape: title, amount in kopecks,
-// payer, splitMode enum, and shares per participant (order-insensitive).
+// Does the stored record match the submitted edit? Compares the FULL
+// saved field set against a snapshot of the sent request
+// (S.uncheckedExpense), in the shape the server stores/returns: title,
+// amount in kopecks, payer, splitMode enum, shares per participant
+// (order-insensitive), comment (notes), categoryId, and the
+// foreign-currency fields (originalCurrency/originalAmount).
+// - Defaults: a missing notes/categoryId counts as '' / 0 on either
+//   side, so an edit that never set them still confirms.
+// - Missing field: when the sent value is NOT the default but the
+//   answer does not carry the field at all, the result is "missing" —
+//   never a match. The server may simply not return the field; the
+//   check cannot tell an old version from a stripped answer, and both
+//   fail closed.
+// - Notes are compared trimmed on both sides: servers commonly trim
+//   free text, and a whitespace-only difference must not block a
+//   confirmation forever (assumed normalization, see README).
+// - Foreign currency: the server re-derives the group amount at its
+//   own rate, so the stored amount may differ from the sent one. The
+//   sent SOURCE values (originalAmount/originalCurrency) are compared
+//   exactly and are authoritative; the stored amount is accepted within
+//   1% (+2 kopecks). Without foreign currency the amount is a direct
+//   sent value and must match exactly. Known limit: an edit that moves
+//   only the group amount of a foreign-currency expense by less than
+//   the tolerance cannot be told apart from a server re-derivation.
 // Lookup by ID is not a match by itself — an edit reuses an existing ID.
-// Anything unconfirmed fails closed: the caller keeps the form open.
-function expenseMatchesPayload(found,payload){
- if(!found||!payload)return false;
- if(found.title!==payload.title)return false;
- if(Number(found.amount)!==Number(payload.amount))return false;
- if(found.paidById!==payload.paidById)return false;
- if(found.splitMode!==payload.splitMode)return false;
+// Returns {ok:true} or {ok:false, missing:[labels], mismatch:[labels]}.
+// Anything not ok fails closed: the caller keeps the form open.
+const FX_AMOUNT_TOLERANCE_PCT=0.01;
+function expenseMatchDetail(found,payload){
+ if(!found||!payload)return {ok:false,missing:[],mismatch:['запись']};
+ const missing=[],mismatch=[];
+ const label={title:'название',amount:'сумма',paidById:'плательщик',splitMode:'способ деления',paidFor:'доли',notes:'комментарий',categoryId:'категория',originalCurrency:'валюта оплаты',originalAmount:'исходная сумма'};
+ const has=(obj,key)=>obj[key]!==undefined&&obj[key]!==null;
+ if(found.title!==payload.title)mismatch.push(label.title);
+ if(found.paidById!==payload.paidById)mismatch.push(label.paidById);
+ if(found.splitMode!==payload.splitMode)mismatch.push(label.splitMode);
  const sharesOf=list=>{const m=new Map();for(const s of (list||[]))m.set(s.participantId,Number(s.shares)||0);return m;};
  const a=sharesOf(found.paidFor),b=sharesOf(payload.paidFor);
- if(a.size!==b.size)return false;
- for(const [id,v] of a)if(b.get(id)!==v)return false;
- return true;
+ let sharesOk=a.size===b.size;
+ if(sharesOk)for(const [id,v] of a)if(b.get(id)!==v){sharesOk=false;break;}
+ if(!sharesOk)mismatch.push(label.paidFor);
+ const notesFound=has(found,'notes')?String(found.notes).trim():'';
+ const notesSent=has(payload,'notes')?String(payload.notes).trim():'';
+ if(!has(found,'notes')&&notesSent!=='')missing.push(label.notes);
+ else if(notesFound!==notesSent)mismatch.push(label.notes);
+ const catFound=has(found,'categoryId')?Number(found.categoryId):0;
+ const catSent=has(payload,'categoryId')?Number(payload.categoryId):0;
+ if(!has(found,'categoryId')&&catSent!==0)missing.push(label.categoryId);
+ else if(catFound!==catSent)mismatch.push(label.categoryId);
+ const fxSent=!!(has(payload,'originalCurrency')&&payload.originalCurrency);
+ const fxFound=!!(has(found,'originalCurrency')&&found.originalCurrency);
+ if(fxSent){
+  if(!has(found,'originalCurrency'))missing.push(label.originalCurrency);
+  else if(found.originalCurrency!==payload.originalCurrency)mismatch.push(label.originalCurrency);
+  if(!has(found,'originalAmount'))missing.push(label.originalAmount);
+  else if(Number(found.originalAmount)!==Number(payload.originalAmount))mismatch.push(label.originalAmount);
+  // Server-side re-derivation of the group amount (see above).
+  const tol=Math.max(2,Math.round(Number(payload.amount)*FX_AMOUNT_TOLERANCE_PCT));
+  if(!has(found,'amount'))missing.push(label.amount);
+  else if(Math.abs(Number(found.amount)-Number(payload.amount))>tol)mismatch.push(label.amount);
+ }else{
+  if(fxFound)mismatch.push(label.originalCurrency);
+  if(has(found,'originalAmount')&&Number(found.originalAmount)!==0)mismatch.push(label.originalAmount);
+  if(!has(found,'amount'))missing.push(label.amount);
+  else if(Number(found.amount)!==Number(payload.amount))mismatch.push(label.amount);
+ }
+ if(missing.length||mismatch.length)return {ok:false,missing,mismatch};
+ return {ok:true};
 }
-function showExpenseSaveStatus({kind,message,payload}){
+function expenseMatchesPayload(found,payload){return expenseMatchDetail(found,payload).ok;}
+function showExpenseSaveStatus({kind,message,payload,missing}){
  const form=root.querySelector('#expense-form');if(!form)return;
  form.querySelectorAll('.save-status').forEach(x=>x.remove());
  const title=payload?.title||document.getElementById('e-title')?.value?.trim()||'трата';
@@ -596,6 +659,10 @@ function showExpenseSaveStatus({kind,message,payload}){
   box.innerHTML=`<strong>Не удалось проверить, сохранилась ли трата</strong><p>Сеть оборвалась, когда мы отправляли трату «${esc(title)}»${amount?` (${esc(amount)})`:''}. Возможно, она уже сохранена — сначала проверьте, а потом отправляйте ещё раз.</p><div class="actions"><button class="btn primary" type="button" data-action="checkExpenseSaved">Проверить, сохранилась ли трата</button></div><p class="form-hint">Повторная отправка идёт с тем же номером траты: второй строки не появится, но запись может обновиться.</p>`;
  }else if(kind==='lostStale'){
   box.innerHTML=`<strong>Найдена прежняя версия траты «${esc(title)}».</strong><p>Отправленная правка не подтверждена: в группе пока хранятся старые данные${amount?` — вы отправляли «${esc(title)}» (${esc(amount)})`:''}. Проверьте поля и отправьте ещё раз — введённое не пропало.</p><div class="actions"><button class="btn primary" type="button" data-action="checkExpenseSaved">Проверить ещё раз</button></div>`;
+ }else if(kind==='lostUnverifiable'){
+  const fields=(missing||[]).map(f=>`«${f}»`).join(', ');
+  const word=(missing||[]).length===1?'поля':'полей';
+  box.innerHTML=`<strong>Проверить правку не удалось: в ответе сервера нет ${word} ${esc(fields)}.</strong><p>Отправленные изменения не подтверждены: возможно, это прежняя версия записи или сервер не возвращает это поле. Проверьте поля и отправьте ещё раз — введённое не пропало.</p><div class="actions"><button class="btn primary" type="button" data-action="checkExpenseSaved">Проверить ещё раз</button></div>`;
  }else if(kind==='lostNotFound'){
   box.innerHTML=`<strong>Траты «${esc(title)}» в группе нет.</strong><p>Отправьте её ещё раз — будет использован тот же номер траты, второй строки не появится.</p><div class="actions"><button class="btn ghost" type="button" data-action="checkExpenseSaved">Проверить ещё раз</button></div>`;
  }else if(kind==='lostCheckFailed'){
@@ -654,6 +721,20 @@ let demoFailLostEditBefore=demoFailParams.get('demoFail')==='lostEditBefore';
 let demoFailLostEditAfter=demoFailParams.get('demoFail')==='lostEditAfter';
 let demoFailNetworkLocalized=demoFailParams.get('demoFail')==='networkLocalized';
 let demoFailRejected=demoFailParams.get('demoFail')==='rejected';
+// Round 6 hooks. demoMissingField strips one field from every group_get
+// response, so the save check must leave the result unconfirmed instead
+// of confirming on the remaining fields (the field is genuinely absent
+// from the answer, not merely unchanged). demoFxServer makes the demo
+// store convert foreign-currency expenses at the server's own rate, so
+// the stored group amount differs from the amount the form sent.
+const DEMO_MISSING_FIELDS=['notes','categoryId','originalAmount','originalCurrency'];
+const demoMissingField=DEMO_MISSING_FIELDS.includes(demoFailParams.get('demoMissingField'))?demoFailParams.get('demoMissingField'):null;
+const demoFxServer=demoFailParams.get('demoFxServer')==='1';
+// Demo-only server FX table: the "server" converts at its own rate.
+// The checks send 100.00 USD as 9 000,00 ₽ (client rate 90.00); the
+// server stores round(10000 × 89.5) = 8 950,00 ₽ — a 0.55% difference
+// the check must accept, because the sent source values match.
+const DEMO_SERVER_FX={USD:89.5,EUR:96.2};
 const demoNetworkError=()=>{const e=new Error('NETWORK_ERROR');e.code='NETWORK_ERROR';return e;};
 function demoView(){const totals=Object.fromEntries(D.participants.map(x=>[x.id,{paid:0,paidFor:0,total:0}]));for(const e of D.expenses){totals[e.paidById].paid+=e.amount;
  // One split engine: the same Hamilton splitExpense as the form, with
@@ -662,7 +743,7 @@ function demoView(){const totals=Object.fromEntries(D.participants.map(x=>[x.id,
  const shares=splitExpense({id:e.id,amount:e.amount,splitMode:e.splitMode,paidFor:e.paidFor});
  for(const s of shares)totals[s.participantId].paidFor+=s.amount;
 }for(const x of Object.values(totals))x.total=x.paid-x.paidFor;const debts=Object.entries(totals).map(([id,v])=>({id,total:v.total})).filter(x=>x.total<0),credits=Object.entries(totals).map(([id,v])=>({id,total:v.total})).filter(x=>x.total>0),transfers=[];for(const debt of debts)for(const credit of credits){const amount=Math.min(-debt.total,credit.total);if(amount>0){transfers.push({from:debt.id,to:credit.id,amount});debt.total+=amount;credit.total-=amount;}}return {group:{...D.group},me:'a',isCreator:true,participants:D.participants,expenses:[...D.expenses].reverse(),balances:totals,settlements:transfers,activities:[]};}
-async function demoCall(name,p){if(name==='bootstrap')return {user:{id:1,name:'Вы'},groups:[{id:D.group.id,name:D.group.name,currencyCode:D.group.currencyCode}],invitation:demoInvite?{groupName:D.group.name,groupId:'demo',currencyCode:D.group.currencyCode,inviterName:'Анна',alreadyMember:false,demoInvite:true,unclaimed:[]}:null,features:{betaFree:true,billingEnabled:false}};if(name==='group_get'){if(demoFailRefreshArmed){demoFailRefreshArmed=false;throw demoNetworkError();}return demoView();}if(name==='group_create'){D.group={id:'demo',name:p.name,currencyCode:p.currencyCode,information:p.information,inviteToken:'demo_inv',proUntil:0};D.participants=[{id:'a',name:'Вы',tgUserId:1},...p.participants.map((name,i)=>({id:'p'+i,name,tgUserId:null,claimToken:'demo'}))];D.expenses=[];return {groupId:'demo'};}if(name==='expense_upsert'){const id=p.expenseId||'exp_'+(''+Math.random()).replace('0.','').padEnd(36,'0');
+async function demoCall(name,p){if(name==='bootstrap')return {user:{id:1,name:'Вы'},groups:[{id:D.group.id,name:D.group.name,currencyCode:D.group.currencyCode}],invitation:demoInvite?{groupName:D.group.name,groupId:'demo',currencyCode:D.group.currencyCode,inviterName:'Анна',alreadyMember:false,demoInvite:true,unclaimed:[]}:null,features:{betaFree:true,billingEnabled:false}};if(name==='group_get'){if(demoFailRefreshArmed){demoFailRefreshArmed=false;throw demoNetworkError();}const v=demoView();if(demoMissingField)v.expenses=v.expenses.map(e=>{const c={...e};delete c[demoMissingField];return c;});return v;}if(name==='group_create'){D.group={id:'demo',name:p.name,currencyCode:p.currencyCode,information:p.information,inviteToken:'demo_inv',proUntil:0};D.participants=[{id:'a',name:'Вы',tgUserId:1},...p.participants.map((name,i)=>({id:'p'+i,name,tgUserId:null,claimToken:'demo'}))];D.expenses=[];return {groupId:'demo'};}if(name==='expense_upsert'){const id=p.expenseId||'exp_'+(''+Math.random()).replace('0.','').padEnd(36,'0');
   // Validate the split BEFORE touching demo data: invalid manual
   // amounts/percentages are rejected, history and balances stay unchanged.
   splitExpense({id,amount:p.amount,splitMode:p.splitMode,paidFor:p.paidFor});
@@ -673,7 +754,11 @@ async function demoCall(name,p){if(name==='bootstrap')return {user:{id:1,name:'�
   if(demoFailLostEditBefore){demoFailLostEditBefore=false;throw demoNetworkError();}
   if(demoFailNetworkLocalized){demoFailNetworkLocalized=false;const e=new Error('Связь прервана');e.type='NETWORK_ERROR';e.code='NETWORK_ERROR';throw e;}
   if(demoFailRejected){demoFailRejected=false;const e=new Error('Сервер отклонил запись: сумма превышает лимит группы');e.type='VALIDATION_ERROR';throw e;}
-  const e={...p,id,createdByTgId:1,expenseDate:Date.now(),isReimbursement:0};D.expenses=D.expenses.filter(x=>x.id!==id).concat(e);
+  const e={...p,id,createdByTgId:1,expenseDate:Date.now(),isReimbursement:0};
+  // Round 6: the demo "server" converts foreign-currency expenses at its
+  // own rate, so the stored group amount differs from the sent one.
+  if(demoFxServer&&e.originalCurrency&&DEMO_SERVER_FX[e.originalCurrency])e.amount=Math.round(e.originalAmount*DEMO_SERVER_FX[e.originalCurrency]);
+  D.expenses=D.expenses.filter(x=>x.id!==id).concat(e);
   // Lost-response hook: the expense is written FIRST, then the network
   // error is returned — exactly the "request may have gone through" case.
   if(demoFailLostExpense){demoFailLostExpense=false;throw demoNetworkError();}
