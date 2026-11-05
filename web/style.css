@@ -112,3 +112,20 @@
 .expense-tools-content { display: grid; gap: 12px; }
 .field[hidden] { display: none; }
 h1[tabindex='-1']:focus { outline: none; }
+
+/* UX redesign: entry-mode switcher (demo), theme toggle, states. */
+.entry-switch{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--app-soft);border:1px solid var(--border);border-radius:13px;padding:8px 10px;margin:0 0 14px}
+.entry-switch>span{font-size:12px;font-weight:750;color:var(--muted)}
+.entry-btn{border:0;background:transparent;color:var(--muted);font-weight:750;font-size:12px;padding:9px 12px;border-radius:9px;min-height:36px}
+.entry-btn.active{background:var(--white);color:var(--brand);box-shadow:0 2px 8px #2d399019}
+.theme-toggle{flex:none;min-width:40px;min-height:40px;padding:8px 10px}
+.form-error{margin:0}
+.empty p{margin:0 0 14px}
+.empty .btn{margin-top:2px}
+@media (max-width: 360px) {
+  .summary .metric strong{font-size:17px}
+  .group-primary{flex-direction:column}
+  .group-primary>.btn{width:100%}
+  .entry-switch{gap:6px;padding:6px 8px}
+  .entry-btn{flex:1;padding:9px 4px}
+}

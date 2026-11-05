@@ -7,11 +7,21 @@ import installEnhancements from './advanced-ui.js';
 const tg=window.Telegram?.WebApp;
 const root=document.querySelector('#app');
 let renderedScreen;
-const S={page:'home',tab:'expenses',boot:null,group:null,groupId:null,invitation:null,loading:false,notice:null, demo:false,edit:null};
+// UX redesign: demo-only preferences. Entry mode picks the first screen
+// inside a group (A = history with visible balance, B = settlements first).
+// Persisted in localStorage so the demo comparison is stable across reloads.
+// Money logic is untouched; only presentation and navigation change.
+const lsGet=k=>{try{return localStorage.getItem(k)}catch{return null}};
+const lsSet=(k,v)=>{try{localStorage.setItem(k,v)}catch{}};
+const S={page:'home',tab:'expenses',boot:null,group:null,groupId:null,invitation:null,loading:false,notice:null, demo:false,edit:null,entryMode:lsGet('spliit.entryMode')==='settlements'?'settlements':'history'};
+try{if(lsGet('spliit.demoTheme')==='dark')document.documentElement.classList.add('tg-dark')}catch{}
 const CURRENCIES=['RUB','USD','EUR','CNY','TRY','THB','AED','KZT','GEL','AMD'];
 const CURRENCY={RUB:'₽',USD:'$',EUR:'€',CNY:'¥',TRY:'₺',THB:'฿',AED:'د.إ',KZT:'₸',GEL:'₾',AMD:'֏'};
 const esc=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=(v,code='RUB')=>(Number(v||0)/100).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+(CURRENCY[code]||code);
+// Signed amounts: debts are distinguished by words AND by the sign of the
+// sum (outgoing "−", incoming "+"). Zero is neutral — never green/red.
+const signedMoney=(v,code='RUB')=>{const n=Number(v||0);const abs=(Math.abs(n)/100).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2});return (n<0?'−':n>0?'+':'')+abs+' '+(CURRENCY[code]||code)};
 const betaFree=()=>S.boot?.features?.betaFree===true;
 const extrasEnabled=()=>betaFree() || (S.group?.group?.proUntil > Date.now());
 const haptic=type=>{try{tg?.HapticFeedback?.notificationOccurred(type||'success');}catch{}};
@@ -25,15 +35,19 @@ async function call(name,input={}){
  if(typeof srv?.call!=='function')throw Error('Откройте Spleet через бота в Telegram или попробуйте демоверсию');
  return new Promise((resolve,reject)=>srv.call(name,input,(error,data)=>error?reject(new Error(error.message||error.type||'Ошибка API')):resolve(data)));
 }
-async function busy(fn,preserveForm=false){try{S.loading=true;await fn();}catch(e){toast(errText(e),true);if(S.page==='create'||S.page==='expense'||S.page==='join'||S.page==='settings')preserveForm=true;}finally{try{await refreshPending();}catch(e){toast(errText(e),true);}S.loading=false;if(!preserveForm)render();else {root.querySelectorAll('button').forEach(x=>x.disabled=false);updateExpensePreview();}}}
+async function busy(fn,preserveForm=false){try{S.loading=true;await fn();}catch(e){toast(errText(e),true);if(S.page==='create'||S.page==='expense'||S.page==='join'||S.page==='settings')preserveForm=true;
+ // Save failure: keep the error visible inside the form (fields are preserved),
+ // not only as a disappearing toast. The user sees what failed and what to do.
+ if(preserveForm){const form=root.querySelector('form');if(form){form.querySelectorAll('.form-error').forEach(x=>x.remove());const err=document.createElement('p');err.className='notice error form-error';err.setAttribute('role','alert');err.textContent='Не сохранено: '+errText(e)+'. Проверьте поля и попробуйте ещё раз — введённое не пропало.';form.prepend(err);}}}
+ finally{try{await refreshPending();}catch(e){toast(errText(e),true);}S.loading=false;if(!preserveForm)render();else {root.querySelectorAll('button').forEach(x=>x.disabled=false);updateExpensePreview();}}}
 function toast(msg,bad=false){const notice={msg,bad};S.notice=notice;document.querySelectorAll('.toast').forEach(el=>el.remove());const el=document.createElement('div');el.className='toast'+(bad?' error':'');el.setAttribute('role','alert');el.textContent=msg;root.appendChild(el);setTimeout(()=>{if(S.notice===notice){S.notice=null;document.querySelectorAll('.toast').forEach(x=>x.remove());}},3500);}
-function header(){const letter=(S.boot?.user?.name||'Г').charAt(0).toUpperCase();return `<header class="header"><div class="brand">spliit<span>.</span></div><div class="flex">${S.demo?'<span class="badge demo">ДЕМО</span>':''}<div class="avatar" title="${esc(S.boot?.user?.name||'Гость')}">${esc(letter)}</div></div></header>`;}
+function header(){const letter=(S.boot?.user?.name||'Г').charAt(0).toUpperCase();const dark=document.documentElement.classList.contains('tg-dark');const themeBtn=(S.demo&&!tg)?`<button class="btn small ghost theme-toggle" type="button" data-action="theme" aria-label="Переключить тему: сейчас ${dark?'тёмная':'светлая'}" title="Светлая / тёмная тема">${dark?'☀':'☾'}</button>`:'';return `<header class="header"><div class="brand">spliit<span>.</span></div><div class="flex">${S.demo?'<span class="badge demo">ДЕМО</span>':''}${themeBtn}<div class="avatar" title="${esc(S.boot?.user?.name||'Гость')}">${esc(letter)}</div></div></header>`;}
 function bottom(){return `<nav class="footbar"><button class="${S.page==='home'?'active':''}" data-action="home"><b>⌂</b>Группы</button><button class="${S.page==='create'?'active':''}" data-action="create"><b>＋</b>Создать</button><button class="${S.page==='group'?'active':''}" data-action="openCurrent"><b>≡</b>Расходы</button></nav>`;}
 function viewHome(){
  const groups=S.boot?.groups||[];
  return `<h1 class="title">Ваши группы</h1>
  ${groups.length||S.invitation?'':'<p class="lead">Создайте группу для поездки, ужина или домашних расходов. Добавляйте траты, а Spleet посчитает, кто кому должен.</p>'}
- ${S.inviteUnavailable?'<p class="notice">Приглашение не найдено. Попросите организатора отправить новую ссылку.</p>':''}
+ ${S.inviteUnavailable?'<p class="notice" role="status">Приглашение не найдено. Попросите организатора отправить новую ссылку.</p><div class="actions"><button class="btn primary" data-action="create">Создать свою группу</button><button class="btn ghost" data-action="home">Обновить список</button></div>':''}
  ${S.invitation?.alreadyMember?`<div class="join-box"><h2>${esc(S.invitation.groupName)}</h2><p>Вы уже в этой группе.</p><button class="btn primary" data-action="group" data-id="${esc(S.invitation.groupId)}">Открыть группу</button></div>`:''}
  ${S.invitation&&!S.invitation.alreadyMember?`<div class="join-box"><div class="eyebrow">ВАС ПРИГЛАСИЛИ</div><h3>${esc(S.invitation.groupName)}</h3><p class="note">Валюта группы: ${esc(S.invitation.currencyCode)}</p><button class="btn primary full" data-action="join">Присоединиться</button></div>`:''}
  ${S.homeLoadFailed?'<p class="notice error" role="alert">Не удалось загрузить группы. Проверьте связь и попробуйте снова.</p><button class="btn ghost" data-action="home">Обновить список</button>':''}
@@ -45,8 +59,13 @@ function back(title,subtitle=''){return `<div class="mini-nav"><button class="ba
 function viewCreate(){return `${back('Новая группа','Укажите основные параметры')}<form class="form" id="create-form"><div class="field"><label for="g-name">Название группы</label><input id="g-name" name="name" type="text" autocomplete="off" autocapitalize="sentences" maxlength="80" required aria-label="Название группы" placeholder="Например, Шерегеш 2026"/></div><div class="field"><label for="g-cur">Валюта учёта</label><select id="g-cur" name="currencyCode">${CURRENCIES.map(x=>`<option value="${x}" ${x==='RUB'?'selected':''}>${x} · ${CURRENCY[x]}</option>`).join('')}</select></div><div class="field"><label for="g-desc">Описание (необязательно)</label><textarea id="g-desc" name="information" maxlength="1000" placeholder="Общая поездка или расходы квартиры"></textarea></div><div class="notice">Вы автоматически добавитесь в группу. Чтобы позвать остальных, после создания нажмите «Пригласить» и отправьте ссылку через Telegram. Имена заранее вводить не нужно.</div><button class="btn primary full" type="submit">Создать группу</button></form>`;}
 function viewGroup(){const data=S.group;if(!data)return '<div class="card empty">Загрузка группы…</div>';
  const g=data.group,code=g.currencyCode,balance=data.balances?.[data.me]?.total||0;
- const own=balance<0?'Вы должны':balance>0?'Вам должны':'Ваш баланс';
- return `${back(g.name,`${data.participants.length} участников · ${code}`)}<div class="summary"><div class="metric"><span>${own}</span><strong class="${balance>=0?'positive':'negative'}">${money(Math.abs(balance),code)}</strong></div><div class="metric"><span>Всего расходов</span><strong>${money((data.expenses||[]).filter(e=>!e.isReimbursement).reduce((a,b)=>a+b.amount,0),code)}</strong></div></div>
+ const own=balance<0?'Вы должны':balance>0?'Вам должны':'Долгов нет';
+ const balanceClass=balance<0?'negative':balance>0?'positive':'muted';
+ // Entry-mode switcher (demo only): A = history with visible balance,
+ // B = settlements on the first screen. Default A; the choice persists.
+ const entrySwitch=S.demo?`<div class="entry-switch" role="group" aria-label="Первый экран группы"><span>Первый экран:</span><button type="button" class="entry-btn ${S.entryMode==='history'?'active':''}" data-action="entryMode" data-mode="history" aria-pressed="${S.entryMode==='history'}">История</button><button type="button" class="entry-btn ${S.entryMode==='settlements'?'active':''}" data-action="entryMode" data-mode="settlements" aria-pressed="${S.entryMode==='settlements'}">Расчёты</button></div>`:'';
+ return `${back(g.name,`${data.participants.length} участников · ${code}`)}<div class="summary"><div class="metric"><span>${own}</span><strong class="${balanceClass}">${signedMoney(balance,code)}</strong></div><div class="metric"><span>Всего расходов</span><strong>${money((data.expenses||[]).filter(e=>!e.isReimbursement).reduce((a,b)=>a+b.amount,0),code)}</strong></div></div>
+ ${entrySwitch}
  <div class="actions group-primary"><button class="btn primary" data-action="expense">+ Добавить трату</button><button class="btn ghost" data-action="invite">Пригласить</button></div>
  <div class="tabs">${[['expenses','Расходы'],['balances','Долги'],['members','Участники']].map(([t,label])=>`<button class="tab ${S.tab===t?'active':''}" data-action="tab" aria-pressed="${S.tab===t}" data-tab="${t}">${label}</button>`).join('')}</div>
  ${recoveryPanel(data)}${S.tab==='expenses'?renderExpenses(data):S.tab==='balances'?renderBalances(data):renderMembers(data)}
@@ -66,7 +85,7 @@ async function refreshPending(){
  let pending,error;try{pending=await pendingSettlement(S);}catch(e){error=errText(e);}
  if(S.groupId===groupId&&S.group?.me===member&&S.boot?.user?.id===uid){S.pendingSettlement=pending;S.settlementStorageError=error;}
 }
-function renderExpenses(d){return d.expenses.length?`<div class="stack">${d.expenses.map(e=>{const payer=d.participants.find(p=>p.id===e.paidById)?.name||'Участник';return `<div class="card expense"><div class="expense-icon">${e.isReimbursement?'⇄':'◈'}</div><div style="flex:1;min-width:0"><strong>${esc(e.title)}</strong><small>${esc(payer)} · ${fmtDate(e.expenseDate)}</small></div><div class="amount">${money(e.amount,d.group.currencyCode)}${(e.createdByTgId===S.boot?.user?.id||d.isCreator)?`<div><button class="btn small ghost" data-action="${e.isReimbursement?'deleteExpenseDirect':'editExpense'}" data-id="${esc(e.id)}">${e.isReimbursement?'Удалить':'Изменить'}</button></div>`:''}</div></div>`}).join('')}</div>`:'<div class="card empty">Расходов пока нет. Добавьте первый чек.</div>';}
+function renderExpenses(d){return d.expenses.length?`<div class="stack">${d.expenses.map(e=>{const payer=d.participants.find(p=>p.id===e.paidById)?.name||'Участник';return `<div class="card expense"><div class="expense-icon">${e.isReimbursement?'⇄':'◈'}</div><div style="flex:1;min-width:0"><strong>${esc(e.title)}</strong><small>${esc(payer)} · ${fmtDate(e.expenseDate)}</small></div><div class="amount">${money(e.amount,d.group.currencyCode)}${(e.createdByTgId===S.boot?.user?.id||d.isCreator)?`<div><button class="btn small ghost" data-action="${e.isReimbursement?'deleteExpenseDirect':'editExpense'}" data-id="${esc(e.id)}">${e.isReimbursement?'Удалить':'Изменить'}</button></div>`:''}</div></div>`}).join('')}</div>`:'<div class="card empty"><p>Расходов пока нет. Добавьте первый чек — Spleet сразу посчитает доли.</p><button class="btn primary" data-action="expense">Добавить первую трату</button></div>';}
 function renderBalances(data){
  const transfers=data.settlements||[];
  if(!transfers.length)return '<div class="card empty">Долгов нет. Все расчёты закрыты.</div>';
@@ -79,11 +98,15 @@ function renderBalances(data){
   const recipientName=esc(recipient?.name||'Участник');
   const title=outgoing?'Вы должны':incoming?'Вам должны':'Долг между участниками';
   const direction=outgoing?`Получатель: ${recipientName}`:incoming?`От кого: ${senderName}`:`${senderName} → ${recipientName}`;
+  // Sign follows the words: what you owe is "−", what you are owed is "+".
+  // Third-party debts are not yours: amount stays unsigned, direction is words.
+  const signed=outgoing?signedMoney(-transfer.amount,data.group.currencyCode):incoming?signedMoney(transfer.amount,data.group.currencyCode):money(transfer.amount,data.group.currencyCode);
+  const amountClass=outgoing?'negative':incoming?'positive':'';
   const details=outgoing&&recipient?.sbpPhone?`<small>СБП ${esc(recipient.sbpPhone)}${recipient.sbpBank?' · '+esc(recipient.sbpBank):''}</small>`:'';
   const action=outgoing&&!S.pendingSettlement&&!S.settlementStorageError
    ?`<button class="btn small primary" data-action="settle" data-to="${esc(transfer.to)}" data-amount="${transfer.amount}">Отметить возврат</button>`
    :incoming&&sender?.tgUserId?`<button class="btn small ghost" data-action="remind" data-debtor="${esc(transfer.from)}">Напомнить о долге</button>`:'';
-  return `<article class="card debt-card"><div><strong>${title}</strong><small>${direction}</small>${details}</div><strong class="debt-amount">${money(transfer.amount,data.group.currencyCode)}</strong>${action}</article>`;
+  return `<article class="card debt-card"><div><strong>${title}</strong><small>${direction}</small>${details}</div><strong class="debt-amount ${amountClass}">${signed}</strong>${action}</article>`;
  });
  return `<div class="section-head"><h2>Кому и сколько вернуть</h2></div><p class="note">Переведите деньги в своём банке, затем отметьте возврат здесь.</p><div class="stack">${rows.join('')}</div>`;
 }
@@ -184,7 +207,7 @@ function render(){document.body.classList.toggle('spliit-form-open',['expense','
  }
 }
 async function loadHome(){const start=tg?.initDataUnsafe?.start_param||new URLSearchParams(location.search).get('startapp')||'';S.boot=await call('bootstrap',{startParam:start});S.homeLoadFailed=false;S.invitation=S.boot.invitation;S.inviteUnavailable=start.startsWith('inv_')&&!S.invitation;S.page='home';render();}
-async function openGroup(id){S.groupId=id;S.group=await call('group_get',{groupId:id});await refreshPending();S.page='group';S.tab='expenses';if(!S.loading)render();}
+async function openGroup(id){S.groupId=id;S.group=await call('group_get',{groupId:id});await refreshPending();S.page='group';S.tab=S.entryMode==='settlements'?'balances':'expenses';if(!S.loading)render();}
 function formData(id){return new FormData(document.getElementById(id));}
 function expensePayload(){const f=formData('expense-form'),mode=f.get('splitMode'),ids=f.getAll('participant');if(!ids.length)throw Error('Выберите хотя бы одного участника');const paidFor=ids.map(id=>{let shares=1;if(mode!=='EVENLY'){const raw=String(f.get(`weight_${id}`)||'0').replace(',','.');if(!/^\d+(\.\d{1,2})?$/.test(raw))throw Error('Некорректная доля');shares=mode==='BY_SHARES'?Number(raw):Math.round(Number(raw)*100);}return {participantId:id,shares};});const payload={groupId:S.groupId,expenseId:S.edit?.id||S.newExpenseId,title:String(f.get('title')),amount:amountInt(f.get('amount')),paidById:String(f.get('paidById')),splitMode:mode,paidFor,categoryId:Number(f.get('categoryId')||0),notes:String(f.get('notes')||'')};
  const currency=f.get('originalCurrency');if(currency){payload.originalCurrency=String(currency);payload.originalAmount=amountInt(f.get('originalAmount'));}
@@ -215,6 +238,8 @@ root.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(!
  if(action==='group'){await openGroup(b.dataset.id);return;}
  if(action==='openCurrent'){if(S.groupId)await openGroup(S.groupId);else await loadHome();return;}
  if(action==='tab'){S.tab=b.dataset.tab;return;}
+ if(action==='entryMode'){S.entryMode=b.dataset.mode==='settlements'?'settlements':'history';lsSet('spliit.entryMode',S.entryMode);S.tab=S.entryMode==='settlements'?'balances':'expenses';return;}
+ if(action==='theme'){const dark=document.documentElement.classList.toggle('tg-dark');lsSet('spliit.demoTheme',dark?'dark':'light');return;}
  if(action==='expense'){S.edit=null;S.newExpenseId='exp_'+Array.from(crypto.getRandomValues(new Uint8Array(18)),x=>x.toString(16).padStart(2,'0')).join('');S.page='expense';return;}
  if(action==='deleteExpenseDirect'){if(!confirm('Удалить запись возврата долга?'))return;await call('expense_delete',{groupId:S.groupId,expenseId:b.dataset.id});await openGroup(S.groupId);return;}
  if(action==='editExpense'){const v=S.group.expenses.find(x=>x.id===b.dataset.id);if(v?.isReimbursement){toast('Подтверждение перевода нельзя редактировать. Его может удалить автор или организатор.');return;}S.edit=v;S.page='expense';return;}
