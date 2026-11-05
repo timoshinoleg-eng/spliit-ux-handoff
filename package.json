@@ -1,0 +1,10 @@
+{
+  "name": "spliit-ux-handoff",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prebuild": "node scripts/prepare-expense-money.mjs",
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {"jsqr": "1.4.0"}
+}
