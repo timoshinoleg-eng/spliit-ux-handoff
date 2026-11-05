@@ -2,8 +2,8 @@ import {installNativeUX,saveSbp,loadSbp,clearSbp} from './native-ux.js';
 const money=(v,c)=>(v/100).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+c;
 const escapeHtml=x=>String(x??'').replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
 const say=text=>{const t=window.Telegram?.WebApp;if(t?.showAlert)t.showAlert(String(text));else alert(text)};
-export default function installNext({S,call,render,openGroup}){
- const root=document.querySelector('#app'),native=installNativeUX({S});
+export default function installNext({S,call,render,openGroup,modalBack}){
+ const root=document.querySelector('#app'),native=installNativeUX({S,closeTopModal:modalBack});
  function deco(){
   native.render();
   if(S.page==='group'&&S.group){

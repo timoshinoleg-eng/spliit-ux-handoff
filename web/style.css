@@ -141,5 +141,8 @@ h1[tabindex='-1']:focus { outline: none; }
 .allocation-total.error{color:var(--bad)}
 .toast.error{pointer-events:auto;cursor:pointer}
 .toast-close{margin-left:10px;font-weight:800}
+/* Round 3: precise save status in the expense form. */
+.save-status p{margin:8px 0}
+.save-status .actions{margin-top:10px}
 .spliit-kb-open .footbar{display:none}
 .spliit-kb-open .page{padding-bottom:calc(32px + env(safe-area-inset-bottom,0px))}

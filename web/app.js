@@ -22,12 +22,28 @@ const money=(v,code='RUB')=>(Number(v||0)/100).toLocaleString('ru-RU',{minimumFr
 // Signed amounts: debts are distinguished by words AND by the sign of the
 // sum (outgoing "−", incoming "+"). Zero is neutral — never green/red.
 const signedMoney=(v,code='RUB')=>{const n=Number(v||0);const abs=(Math.abs(n)/100).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2});return (n<0?'−':n>0?'+':'')+abs+' '+(CURRENCY[code]||code)};
+// Russian plural for "перевод": 1 перевод, 2–4 перевода, 5+ переводов.
+const transferWord=n=>{const m=n%10,h=n%100;if(m===1&&h!==11)return 'перевод';if((m===2||m===3||m===4)&&h!==12&&h!==13&&h!==14)return 'перевода';return 'переводов';};
 const betaFree=()=>S.boot?.features?.betaFree===true;
 const extrasEnabled=()=>betaFree() || (S.group?.group?.proUntil > Date.now());
 const haptic=type=>{try{tg?.HapticFeedback?.notificationOccurred(type||'success');}catch{}};
 const fmtDate=ts=>new Date(ts).toLocaleDateString('ru-RU',{day:'numeric',month:'short'});
 const amountInt=value=>{const s=String(value).trim().replace(/\s/g,'').replace(',','.');if(!/^(\d{1,9})(\.\d{1,2})?$/.test(s))throw Error('Нужна положительная сумма с точностью до копейки');const [a,b='']=s.split('.'); const n=Number(a)*100+Number(b.padEnd(2,'0'));if(!Number.isSafeInteger(n)||n<=0)throw Error('Некорректная сумма');return n;};
 const errText=e=>String(e?.message||e||'Неизвестная ошибка');
+// Modal back-stack: while a modal is open, system Back (tg.BackButton)
+// closes the top modal first instead of navigating. Each modal registers
+// its close handler on open and removes it on close; the handler itself
+// returns focus to the element that opened the modal.
+const modalBackStack=[];
+function pushModalBack(handler){modalBackStack.push(handler);}
+function removeModalBack(handler){const i=modalBackStack.indexOf(handler);if(i>=0)modalBackStack.splice(i,1);}
+function handleModalBack(){const h=modalBackStack[modalBackStack.length-1];if(!h)return false;modalBackStack.pop();h();return true;}
+// Network errors mean the result is UNKNOWN (the request may have gone
+// through): they are shown as "lost response", never as "not saved".
+const isNetworkError=e=>{const m=errText(e);return e?.code==='NETWORK_ERROR'||e?.type==='NETWORK_ERROR'||m.includes('NETWORK_ERROR')||/Failed to fetch|NetworkError|network error|timed out|timeout/i.test(m);};
+// Marker error: the precise status was already shown by the thrower
+// (e.g. the expense save-status panel); busy() only keeps the form.
+const handledError=()=>{const e=new Error('handled');e.handled=true;return e;};
 function configLink(token){ if(!BOT_USERNAME)return null;return MINI_APP_SHORT_NAME ? `https://t.me/${BOT_USERNAME}/${MINI_APP_SHORT_NAME}?startapp=${encodeURIComponent(token)}` : `https://t.me/${BOT_USERNAME}?start=${encodeURIComponent(token)}`; }
 async function call(name,input={}){
  if(S.demo)return demoCall(name,input);
@@ -35,10 +51,15 @@ async function call(name,input={}){
  if(typeof srv?.call!=='function')throw Error('Откройте Spleet через бота в Telegram или попробуйте демоверсию');
  return new Promise((resolve,reject)=>srv.call(name,input,(error,data)=>error?reject(new Error(error.message||error.type||'Ошибка API')):resolve(data)));
 }
-async function busy(fn,preserveForm=false){try{S.loading=true;await fn();}catch(e){toast(errText(e),true);if(S.page==='create'||S.page==='expense'||S.page==='join'||S.page==='settings')preserveForm=true;
+async function busy(fn,preserveForm=false){try{S.loading=true;await fn();}catch(e){
+ // Errors with .handled=true were already shown precisely by the code that
+ // threw them (e.g. the expense save-status panel); only keep the form,
+ // without a generic toast or a second "Не сохранено" line.
+ if(e?.handled){if(S.page==='create'||S.page==='expense'||S.page==='join'||S.page==='settings')preserveForm=true;}
+ else{toast(errText(e),true);if(S.page==='create'||S.page==='expense'||S.page==='join'||S.page==='settings')preserveForm=true;
  // Save failure: keep the error visible inside the form (fields are preserved),
  // not only as a disappearing toast. The user sees what failed and what to do.
- if(preserveForm){const form=root.querySelector('form');if(form){form.querySelectorAll('.form-error').forEach(x=>x.remove());const err=document.createElement('p');err.className='notice error form-error';err.setAttribute('role','alert');err.textContent='Не сохранено: '+errText(e)+'. Проверьте поля и попробуйте ещё раз — введённое не пропало.';form.prepend(err);}}}
+ if(preserveForm){const form=root.querySelector('form');if(form){form.querySelectorAll('.form-error').forEach(x=>x.remove());const err=document.createElement('p');err.className='notice error form-error';err.setAttribute('role','alert');err.textContent='Не сохранено: '+errText(e)+'. Проверьте поля и попробуйте ещё раз — введённое не пропало.';form.prepend(err);}}}}
  finally{try{await refreshPending();}catch(e){toast(errText(e),true);}S.loading=false;if(!preserveForm)render();else {root.querySelectorAll('button').forEach(x=>x.disabled=false);updateExpensePreview();}}}
 function toast(msg,bad=false){const notice={msg,bad};S.notice=notice;document.querySelectorAll('.toast').forEach(el=>el.remove());const el=document.createElement('div');el.className='toast'+(bad?' error':'');el.setAttribute('role','alert');el.textContent=msg;
  if(bad){
@@ -59,6 +80,7 @@ function bottom(){return `<nav class="footbar"><button class="${S.page==='home'?
 function viewHome(){
  const groups=S.boot?.groups||[];
  return `<h1 class="title">Ваши группы</h1>
+ ${S.saveConfirmed?`<div class="notice success" role="status"><strong>Трата сохранена</strong><p>Трата «${esc(S.saveConfirmed.title)}» сохранена, но список группы не обновился.</p><div class="actions"><button class="btn primary" type="button" data-action="reopenSavedGroup">Открыть группу</button><button class="btn ghost" type="button" data-action="dismissSavedGroup">Скрыть</button></div></div>`:''}
  ${groups.length||S.invitation?'':'<p class="lead">Создайте группу для поездки, ужина или домашних расходов. Добавляйте траты, а Spleet посчитает, кто кому должен.</p>'}
  ${S.inviteUnavailable?'<p class="notice" role="status">Приглашение не найдено. Попросите организатора отправить новую ссылку.</p><div class="actions"><button class="btn primary" data-action="create">Создать свою группу</button><button class="btn ghost" data-action="home">Обновить список</button></div>':''}
  ${S.invitation?.alreadyMember?`<div class="join-box"><h2>${esc(S.invitation.groupName)}</h2><p>Вы уже в этой группе.</p><button class="btn primary" data-action="group" data-id="${esc(S.invitation.groupId)}">Открыть группу</button></div>`:''}
@@ -73,10 +95,9 @@ function viewCreate(){return `${back('Новая группа','Укажите �
 function viewGroup(){const data=S.group;if(!data)return '<div class="card empty">Загрузка группы…</div>';
  const g=data.group,code=g.currencyCode,balance=data.balances?.[data.me]?.total||0;
  const transfers=data.settlements||[];
- // Balance card names the counterparty: the only one, or the largest one
- // by amount ("и ещё N" when there are more). The sum shown is still the
- // user's net total — the name identifies the main counterparty, not the
- // whole sum. Zero balance stays neutral and unnamed.
+ // Balance card names the counterparty only when the balance is a single
+ // transfer. With several transfers the summary shows the net total and
+ // the transfer count; names and exact sums stay in the «Долги» tab.
  function mainCounterparty(list,key){
   const byId=new Map();
   for(const t of list)byId.set(t[key],(byId.get(t[key])||0)+t.amount);
@@ -85,14 +106,15 @@ function viewGroup(){const data=S.group;if(!data)return '<div class="card empty"
   return {name:data.participants.find(p=>p.id===id)?.name||'Участник',amount,others:byId.size-1};
  }
  const cp=balance<0?mainCounterparty(transfers.filter(t=>t.from===data.me),'to'):balance>0?mainCounterparty(transfers.filter(t=>t.to===data.me),'from'):null;
- const cpSuffix=cp&&cp.others?` и ещё ${cp.others}`:'';
- const own=balance<0?(cp?`Вы должны: ${esc(cp.name)}${cpSuffix}`:'Вы должны'):balance>0?(cp?`Вам должны: ${esc(cp.name)}${cpSuffix}`:'Вам должны'):'Долгов нет';
+ const myTransfers=balance<0?transfers.filter(t=>t.from===data.me):balance>0?transfers.filter(t=>t.to===data.me):[];
+ const own=balance<0?(myTransfers.length===1&&cp?`Вы должны: ${esc(cp.name)}`:'Вы должны'):balance>0?(myTransfers.length===1&&cp?`Вам должны: ${esc(cp.name)}`:'Вам должны'):'Долгов нет';
+ const transfersLine=myTransfers.length>1?`<small>${myTransfers.length} ${transferWord(myTransfers.length)}</small>`:'';
  const balanceClass=balance<0?'negative':balance>0?'positive':'muted';
- const settleBtn=cp?`<button class="btn small ghost" type="button" data-action="tab" data-tab="balances">Рассчитаться →</button>`:'';
+ const settleBtn=myTransfers.length?`<button class="btn small ghost" type="button" data-action="tab" data-tab="balances">Рассчитаться →</button>`:'';
  // Entry-mode switcher (demo only): A = history with visible balance,
  // B = settlements on the first screen. Default A; the choice persists.
  const entrySwitch=S.demo?`<div class="entry-switch" role="group" aria-label="Первый экран группы"><span>Первый экран:</span><button type="button" class="entry-btn ${S.entryMode==='history'?'active':''}" data-action="entryMode" data-mode="history" aria-pressed="${S.entryMode==='history'}">История</button><button type="button" class="entry-btn ${S.entryMode==='settlements'?'active':''}" data-action="entryMode" data-mode="settlements" aria-pressed="${S.entryMode==='settlements'}">Расчёты</button></div>`:'';
- return `${back(g.name,`${data.participants.length} участников · ${code}`)}<div class="summary"><div class="metric"><span>${own}</span><strong class="${balanceClass}">${signedMoney(balance,code)}</strong>${settleBtn}</div><div class="metric"><span>Всего расходов</span><strong>${money((data.expenses||[]).filter(e=>!e.isReimbursement).reduce((a,b)=>a+b.amount,0),code)}</strong></div></div>
+ return `${back(g.name,`${data.participants.length} участников · ${code}`)}<div class="summary"><div class="metric"><span>${own}</span><strong class="${balanceClass}">${signedMoney(balance,code)}</strong>${transfersLine}${settleBtn}</div><div class="metric"><span>Всего расходов</span><strong>${money((data.expenses||[]).filter(e=>!e.isReimbursement).reduce((a,b)=>a+b.amount,0),code)}</strong></div></div>
  ${entrySwitch}
  <div class="actions group-primary"><button class="btn primary" data-action="expense">+ Добавить трату</button><button class="btn ghost" data-action="invite">Пригласить</button></div>
  <div class="tabs">${[['expenses','Расходы'],['balances','Долги'],['members','Участники']].map(([t,label])=>`<button class="tab ${S.tab===t?'active':''}" data-action="tab" aria-pressed="${S.tab===t}" data-tab="${t}">${label}${t==='members'?'':` (${t==='expenses'?data.expenses.length:transfers.length})`}</button>`).join('')}</div>
@@ -282,7 +304,7 @@ function render(){document.body.classList.toggle('spliit-form-open',['expense','
  }
 }
 async function loadHome(){const start=tg?.initDataUnsafe?.start_param||new URLSearchParams(location.search).get('startapp')||'';S.boot=await call('bootstrap',{startParam:start});S.homeLoadFailed=false;S.invitation=S.boot.invitation;S.inviteUnavailable=start.startsWith('inv_')&&!S.invitation;S.page='home';render();}
-async function openGroup(id){S.groupId=id;S.group=await call('group_get',{groupId:id});await refreshPending();S.page='group';S.tab=S.entryMode==='settlements'?'balances':'expenses';if(!S.loading)render();}
+async function openGroup(id){S.groupId=id;S.group=await call('group_get',{groupId:id});S.saveConfirmed=null;await refreshPending();S.page='group';S.tab=S.entryMode==='settlements'?'balances':'expenses';if(!S.loading)render();}
 function formData(id){return new FormData(document.getElementById(id));}
 function expensePayload(){const f=formData('expense-form'),mode=f.get('splitMode'),ids=f.getAll('participant');if(!ids.length)throw Error('Выберите хотя бы одного участника');const paidFor=ids.map(id=>{let shares=1;if(mode!=='EVENLY'){const raw=String(f.get(`weight_${id}`)||'0').replace(',','.');if(!/^\d+(\.\d{1,2})?$/.test(raw))throw Error('Некорректная доля');shares=mode==='BY_SHARES'?Number(raw):Math.round(Number(raw)*100);}return {participantId:id,shares};});const payload={groupId:S.groupId,expenseId:S.edit?.id||S.newExpenseId,title:String(f.get('title')),amount:amountInt(f.get('amount')),paidById:String(f.get('paidById')),splitMode:mode,paidFor,categoryId:Number(f.get('categoryId')||0),notes:String(f.get('notes')||'')};
  const currency=f.get('originalCurrency');if(currency){payload.originalCurrency=String(currency);payload.originalAmount=amountInt(f.get('originalAmount'));}
@@ -310,8 +332,8 @@ async function applyReceiptQr(qr){
 // Settlement confirmation modal (replaces window.confirm for 'settle').
 // Lives on document.body so app render() never destroys it mid-flow.
 // Reuses the .advanced-modal/.advanced-panel surfaces from advanced-ui.
-let settleModal=null,settleReturnFocus=null;
-function openSettleModal({to,amount}){
+let settleModal=null,settleReturnFocus=null,settleBackHandler=null,settleTo=null;
+function openSettleModal({to,amount,opener}){
  closeSettleModal();
  const data=S.group,code=data.group.currencyCode;
  const recipient=data.participants.find(p=>p.id===to);
@@ -320,15 +342,22 @@ function openSettleModal({to,amount}){
  const box=document.createElement('div');
  box.className='advanced-modal settle-modal';
  box.setAttribute('role','dialog');box.setAttribute('aria-modal','true');box.setAttribute('aria-labelledby','settle-title');
- box.innerHTML=`<section class="advanced-panel settle-panel"><div class="advanced-head"><h2 id="settle-title">Подтвердить возврат</h2><button class="btn small ghost" type="button" data-settle="close" aria-label="Закрыть окно">✕</button></div>
+ box.innerHTML=`<section class="advanced-panel settle-panel"><div class="advanced-head"><h2 id="settle-title">Записать возврат</h2><button class="btn small ghost" type="button" data-settle="close" aria-label="Закрыть окно">✕</button></div>
  <p class="settle-route"><strong>Вы → ${esc(name)}</strong></p>
  <p class="settle-amount">${money(amount,code)}</p>
  ${phone?`<div class="field"><span class="field-label">Сначала переведите в своём банке по СБП</span><div class="settle-sbp"><span>${esc(phone)}${bank?' · '+esc(bank):''}</span><button class="btn small ghost" type="button" data-settle="copy">Скопировать номер</button></div></div>`:`<p class="form-hint">Реквизиты СБП получателя не указаны — уточните номер у ${esc(name)} и переведите в своём банке.</p>`}
- <p class="form-hint">Нажимайте «Подтвердить возврат», только когда деньги уже переведены: запись появится в истории группы.</p>
- <div class="advanced-actions"><button class="btn primary" type="button" data-settle="confirm">Подтвердить возврат</button><button class="btn ghost" type="button" data-settle="close">Отмена</button></div></section>`;
+ <p class="form-hint">Нажимайте «Записать возврат», только когда деньги уже переведены: запись появится в истории группы.</p>
+ <div class="advanced-actions"><button class="btn primary" type="button" data-settle="confirm">Записать возврат</button><button class="btn ghost" type="button" data-settle="close">Отмена</button></div></section>`;
  document.body.appendChild(box);
  settleModal=box;
- settleReturnFocus=document.activeElement;
+ settleTo=to;
+ // Focus returns to the button that opened the modal (a tap does not move
+ // focus by itself, so document.activeElement alone is not enough).
+ settleReturnFocus=opener||document.activeElement;
+ // System Back closes this modal first (modal back-stack), before the
+ // router navigates anywhere.
+ settleBackHandler=()=>closeSettleModal();
+ pushModalBack(settleBackHandler);
  const focusables=()=>[...box.querySelectorAll('button:not([disabled])')];
  box.addEventListener('keydown',e=>{
   if(e.key==='Escape'){e.preventDefault();closeSettleModal();return;}
@@ -346,6 +375,10 @@ function openSettleModal({to,amount}){
   if(action==='close'){closeSettleModal();return;}
   if(action==='copy'){copySbpNumber(phone,b);return;}
   if(action==='confirm'){
+   // Double confirmation must not write twice: the button is disabled
+   // immediately, and recordSettlement itself dedups by the pending
+   // expense ID (flights map in settlement-recovery.js).
+   if(b.disabled)return;b.disabled=true;
    closeSettleModal();
    busy(async()=>{
     await recordSettlement({S,call,toParticipantId:to,amount});
@@ -359,9 +392,14 @@ function openSettleModal({to,amount}){
 }
 function closeSettleModal(){
  if(!settleModal)return;
+ if(settleBackHandler){removeModalBack(settleBackHandler);settleBackHandler=null;}
  settleModal.remove();settleModal=null;
- if(settleReturnFocus?.focus)settleReturnFocus.focus();
- settleReturnFocus=null;
+ // If the opener was destroyed by a re-render meanwhile, find its
+ // replacement by recipient instead of focusing a detached node.
+ let target=settleReturnFocus;
+ if(target&&!target.isConnected&&settleTo)target=document.querySelector(`[data-action="settle"][data-to="${settleTo}"]`);
+ if(target?.focus)target.focus();
+ settleReturnFocus=null;settleTo=null;
 }
 async function copySbpNumber(phone,btn){
  let ok=false;
@@ -384,9 +422,9 @@ root.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(!
  if(action==='tab'){S.tab=b.dataset.tab;return;}
  if(action==='entryMode'){S.entryMode=b.dataset.mode==='settlements'?'settlements':'history';lsSet('spliit.entryMode',S.entryMode);S.tab=S.entryMode==='settlements'?'balances':'expenses';return;}
  if(action==='theme'){const dark=document.documentElement.classList.toggle('tg-dark');lsSet('spliit.demoTheme',dark?'dark':'light');return;}
- if(action==='expense'){S.edit=null;S.newExpenseId='exp_'+Array.from(crypto.getRandomValues(new Uint8Array(18)),x=>x.toString(16).padStart(2,'0')).join('');S.page='expense';return;}
+ if(action==='expense'){S.edit=null;S.newExpenseId='exp_'+Array.from(crypto.getRandomValues(new Uint8Array(18)),x=>x.toString(16).padStart(2,'0')).join('');S.uncheckedExpense=null;S.page='expense';return;}
  if(action==='deleteExpenseDirect'){if(!confirm('Удалить запись возврата долга?'))return;await call('expense_delete',{groupId:S.groupId,expenseId:b.dataset.id});await openGroup(S.groupId);return;}
- if(action==='editExpense'){const v=S.group.expenses.find(x=>x.id===b.dataset.id);if(v?.isReimbursement){toast('Подтверждение перевода нельзя редактировать. Его может удалить автор или организатор.');return;}S.edit=v;S.page='expense';return;}
+ if(action==='editExpense'){const v=S.group.expenses.find(x=>x.id===b.dataset.id);if(v?.isReimbursement){toast('Подтверждение перевода нельзя редактировать. Его может удалить автор или организатор.');return;}S.edit=v;S.uncheckedExpense=null;S.page='expense';return;}
  if(action==='deleteExpense'){if(!confirm('Удалить этот расход?'))return;await call('expense_delete',{groupId:S.groupId,expenseId:S.edit.id});S.edit=null;S.newExpenseId=null;await openGroup(S.groupId);haptic();return;}
  if(action==='exportCsv'){
    if(!extrasEnabled())throw Error('Экспорт доступен в Pro');
@@ -417,7 +455,23 @@ root.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(!
    }else{await recordSettlement({S,call,toParticipantId:pending.toParticipantId,amount:pending.amount});toast('Возврат записан.');}
    try{await openGroup(S.groupId);}catch{S.group=null;S.page='home';toast('Результат подтверждён. Откройте группу повторно.');}return;
  }
- if(action==='settle'){openSettleModal({to:b.dataset.to,amount:Number(b.dataset.amount)});return;}
+ if(action==='checkExpenseSaved'){
+  const u=S.uncheckedExpense;if(!u)return;
+  try{
+   const data=await call('group_get',{groupId:u.groupId});
+   const found=(data.expenses||[]).find(e=>e.id===u.expenseId);
+   if(found){
+    S.uncheckedExpense=null;S.edit=null;S.newExpenseId=null;
+    S.group=data;S.groupId=u.groupId;S.page='group';S.tab='expenses';
+    await refreshPending();
+    toast('Трата сохранена');return;
+   }
+   showExpenseSaveStatus({kind:'lostNotFound',payload:u});throw handledError();
+  }catch(e){if(e?.handled)throw e;showExpenseSaveStatus({kind:'lostCheckFailed',payload:u});throw handledError();}
+ }
+ if(action==='reopenSavedGroup'){const g=S.saveConfirmed;if(!g)return;await openGroup(g.groupId);return;}
+ if(action==='dismissSavedGroup'){S.saveConfirmed=null;return;}
+ if(action==='settle'){openSettleModal({to:b.dataset.to,amount:Number(b.dataset.amount),opener:b});return;}
  if(action==='remind'){if(!confirm('Напомнить участнику о долге в личном сообщении Telegram? Не чаще одного раза в 24 часа.'))return;await call('remind_debt',{groupId:S.groupId,debtorId:b.dataset.debtor});toast('Напоминание отправлено');return;}
  if(action==='join'){S.page='join';return;}
  if(action==='invite'){S.page='invite';return;}
@@ -441,7 +495,9 @@ root.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(!
  if(action==='leaveGroup'){if(!confirm('Отвязать Telegram и очистить личные реквизиты? История расходов сохранится у группы.'))return;await call('participant_leave',{groupId:S.groupId});S.groupId=null;S.group=null;await loadHome();return;}
  if(action==='deleteGroup'){if(!confirm(`Удалить группу «${S.group.group.name}» и все расходы?`))return;await call('group_delete',{groupId:S.groupId,confirmation:S.group.group.name});S.group=null;S.groupId=null;await loadHome();return;}
  if(action==='demo'){S.demo=true;await loadHome();return;}
- },['fxPreview','scanQr','exportCsv','share'].includes(action));});
+ // 'settle' only opens the modal: re-rendering the page underneath would
+ // destroy the opener button the modal returns focus to on close.
+ },['fxPreview','scanQr','exportCsv','share','settle'].includes(action));});
 root.addEventListener('input',event=>{
  if(event.target.closest('#expense-form')&&event.target.type!=='checkbox'&&event.target.tagName!=='SELECT')updateExpensePreview();
 });
@@ -468,14 +524,56 @@ root.addEventListener('change',event=>{
  if(input.id==='e-mode'||input.name==='participant')updateSplitControls(input.id==='e-mode');
  else updateExpensePreview();
 });
+// Precise save status for the expense form. Three cases, three texts:
+// - rejected: local validation or the server refused with a reason;
+// - lost: the network broke mid-request, the result is unknown;
+// - confirmed-but-stale: the record is saved, the list failed to reload
+//   (handled in the submit flow via S.saveConfirmed, not here).
+// The panel names the concrete expense, keeps the form fields, and — for
+// the lost case — offers a way to check the result with the same expense ID.
+function showExpenseSaveStatus({kind,message,payload}){
+ const form=root.querySelector('#expense-form');if(!form)return;
+ form.querySelectorAll('.save-status').forEach(x=>x.remove());
+ const title=payload?.title||document.getElementById('e-title')?.value?.trim()||'трата';
+ const amount=payload?money(payload.amount,S.group.group.currencyCode):'';
+ const box=document.createElement('section');
+ box.className='notice error save-status form-error';
+ box.setAttribute('role','alert');
+ if(kind==='rejected'){
+  box.innerHTML=`<strong>Трата «${esc(title)}» не сохранена.</strong><p>${esc(message||'Сервер отклонил запись.')} Исправьте данные и отправьте ещё раз — введённое не пропало.</p>`;
+ }else if(kind==='lost'){
+  box.innerHTML=`<strong>Не удалось проверить, сохранилась ли трата</strong><p>Сеть оборвалась, когда мы отправляли трату «${esc(title)}»${amount?` (${esc(amount)})`:''}. Возможно, она уже сохранена — сначала проверьте, а потом отправляйте ещё раз.</p><div class="actions"><button class="btn primary" type="button" data-action="checkExpenseSaved">Проверить, сохранилась ли трата</button></div><p class="form-hint">Повторная отправка идёт с тем же номером траты: второй строки не появится, но запись может обновиться.</p>`;
+ }else if(kind==='lostNotFound'){
+  box.innerHTML=`<strong>Траты «${esc(title)}» в группе нет.</strong><p>Отправьте её ещё раз — будет использован тот же номер траты, второй строки не появится.</p><div class="actions"><button class="btn ghost" type="button" data-action="checkExpenseSaved">Проверить ещё раз</button></div>`;
+ }else if(kind==='lostCheckFailed'){
+  box.innerHTML=`<strong>Проверить не удалось — сеть недоступна.</strong><p>Попробуйте проверить ещё раз или отправьте трату повторно.</p><div class="actions"><button class="btn ghost" type="button" data-action="checkExpenseSaved">Проверить ещё раз</button></div>`;
+ }
+ form.prepend(box);
+ box.scrollIntoView({block:'nearest'});
+}
 root.addEventListener('submit',e=>{e.preventDefault();if(S.loading)return;const id=e.target.id;if(id==='create-form'&&!document.getElementById('g-name')?.value.trim()){toast('Введите название группы',true);document.getElementById('g-name')?.focus();return;}busy(async()=>{
  if(id==='create-form'){const f=formData(id);const group=await call('group_create',{name:f.get('name'),currencyCode:f.get('currencyCode'),information:f.get('information'),participants:[]});await loadHome();await openGroup(group.groupId);haptic();toast('Группа создана. Для приглашения людей нажмите «Пригласить».');return;}
  if(id==='expense-form'){
-  const payload=expensePayload();
-  await call('expense_upsert',payload);
-  S.edit=null;S.newExpenseId=null;
+  // Three distinct outcomes, three distinct texts. The expense ID is
+  // generated once when the form opens (S.newExpenseId) and is NOT
+  // regenerated here, so a retry after a lost response reuses the same
+  // ID and cannot create a second row. The form is never re-rendered
+  // on failure, so the fields stay filled.
+  let payload;
+  try{payload=expensePayload();}
+  catch(e){showExpenseSaveStatus({kind:'rejected',message:errText(e)});toast(errText(e),true);throw handledError();}
+  try{await call('expense_upsert',payload);}
+  catch(e){
+   if(isNetworkError(e)){S.uncheckedExpense={expenseId:payload.expenseId,groupId:payload.groupId,title:payload.title,amount:payload.amount};showExpenseSaveStatus({kind:'lost',payload});throw handledError();}
+   showExpenseSaveStatus({kind:'rejected',message:errText(e),payload});toast(errText(e),true);throw handledError();
+  }
+  S.edit=null;S.newExpenseId=null;S.uncheckedExpense=null;
   try{await openGroup(payload.groupId);toast('Расход сохранён.');}
-  catch{S.group=null;S.page='home';toast('Расход сохранён. Откройте группу, чтобы обновить список.');}
+  catch{
+   // Saved, but the list failed to reload: close the form, say so, and
+   // offer to re-open the group (a button, not just a toast).
+   S.group=null;S.page='home';S.saveConfirmed={groupId:payload.groupId,title:payload.title};toast('Трата сохранена');
+  }
   haptic();return;
  }
  if(id==='sbp-form'){const f=formData(id);await call('participant_sync',{groupId:S.groupId,sbpPhone:f.get('sbpPhone'),sbpBank:f.get('sbpBank'),sbpConsent:f.get('sbpConsent')==='yes'});await openGroup(S.groupId);S.tab='members';return;}
@@ -483,15 +581,33 @@ root.addEventListener('submit',e=>{e.preventDefault();if(S.loading)return;const 
  });});
 // Isolated local demo store. Never synced with the cloud or used for payments.
 const D={group:{id:'demo',name:'Выходные у моря',currencyCode:'RUB',inviteToken:'demo_inv',proUntil:0},participants:[{id:'a',name:'Вы',tgUserId:1,sbpPhone:null,sbpBank:null},{id:'b',name:'Анна',tgUserId:2,sbpPhone:'+79990000000',sbpBank:'Т-Банк'},{id:'c',name:'Иван',tgUserId:3,sbpPhone:null,sbpBank:null}], expenses:[{id:'exp_000000000000000000000000000000000001',groupId:'demo',title:'Ужин у моря',amount:540000,paidById:'b',splitMode:'EVENLY',paidFor:[{participantId:'a',shares:1},{participantId:'b',shares:1},{participantId:'c',shares:1}],createdByTgId:2,expenseDate:Date.now()-86400000,createdAt:Date.now()-86400000,isReimbursement:0}]};
+// Demo-only failure hooks (?demoFail=lostExpense|refreshFail), one-shot.
+// They make the lost-response and stale-list cases reproducible in the
+// browser demo. Never active outside the demo (demoCall only runs there).
+const demoFailParams=new URLSearchParams(location.search);
+let demoFailLostExpense=demoFailParams.get('demoFail')==='lostExpense';
+let demoFailRefreshPending=demoFailParams.get('demoFail')==='refreshFail';
+let demoFailRefreshArmed=false;
+const demoNetworkError=()=>{const e=new Error('NETWORK_ERROR');e.code='NETWORK_ERROR';return e;};
 function demoView(){const totals=Object.fromEntries(D.participants.map(x=>[x.id,{paid:0,paidFor:0,total:0}]));for(const e of D.expenses){totals[e.paidById].paid+=e.amount;
- // Demo engine uses the same Hamilton split as the expense form
- // (splitExpense), so demo balances never diverge from real ones.
- // Fallback keeps the old floor method for malformed stored data.
- let shares=null;try{shares=splitExpense({id:e.id,amount:e.amount,splitMode:e.splitMode,paidFor:e.paidFor});}catch{}
- if(shares){for(const s of shares)totals[s.participantId].paidFor+=s.amount;}
- else{const parts=e.paidFor.filter(p=>p.shares>0),sum=parts.reduce((a,b)=>a+b.shares,0);let left=e.amount;parts.forEach((p,i)=>{const q=i===parts.length-1?left:Math.floor(e.amount*p.shares/sum);totals[p.participantId].paidFor+=q;left-=q;});}
+ // One split engine: the same Hamilton splitExpense as the form, with
+ // the same expense ID. No fallback rounding: invalid stored data
+ // surfaces as a visible error instead of a silent floor recalculation.
+ const shares=splitExpense({id:e.id,amount:e.amount,splitMode:e.splitMode,paidFor:e.paidFor});
+ for(const s of shares)totals[s.participantId].paidFor+=s.amount;
 }for(const x of Object.values(totals))x.total=x.paid-x.paidFor;const debts=Object.entries(totals).map(([id,v])=>({id,total:v.total})).filter(x=>x.total<0),credits=Object.entries(totals).map(([id,v])=>({id,total:v.total})).filter(x=>x.total>0),transfers=[];for(const debt of debts)for(const credit of credits){const amount=Math.min(-debt.total,credit.total);if(amount>0){transfers.push({from:debt.id,to:credit.id,amount});debt.total+=amount;credit.total-=amount;}}return {group:{...D.group},me:'a',isCreator:true,participants:D.participants,expenses:[...D.expenses].reverse(),balances:totals,settlements:transfers,activities:[]};}
-async function demoCall(name,p){if(name==='bootstrap')return {user:{id:1,name:'Вы'},groups:[{id:D.group.id,name:D.group.name,currencyCode:D.group.currencyCode}],invitation:null,features:{betaFree:true,billingEnabled:false}};if(name==='group_get')return demoView();if(name==='group_create'){D.group={id:'demo',name:p.name,currencyCode:p.currencyCode,information:p.information,inviteToken:'demo_inv',proUntil:0};D.participants=[{id:'a',name:'Вы',tgUserId:1},...p.participants.map((name,i)=>({id:'p'+i,name,tgUserId:null,claimToken:'demo'}))];D.expenses=[];return {groupId:'demo'};}if(name==='expense_upsert'){const id=p.expenseId||'exp_'+(''+Math.random()).replace('0.','').padEnd(36,'0');const e={...p,id,createdByTgId:1,expenseDate:Date.now(),isReimbursement:0};D.expenses=D.expenses.filter(x=>x.id!==id).concat(e);return {expenseId:id};}if(name==='expense_delete'){D.expenses=D.expenses.filter(x=>x.id!==p.expenseId);return {deleted:true};}if(name==='settlement_create'){const old=D.expenses.find(e=>e.id===p.expenseId);D.cancelledSettlements??=new Set();if(p.action==='cancel'){if(old)return {expenseId:p.expenseId,amount:old.amount,replayed:true};D.cancelledSettlements.add(p.expenseId);return {expenseId:p.expenseId,amount:p.amount,cancelled:true};}if(D.cancelledSettlements.has(p.expenseId))throw Error('Запись возврата отменена');if(old)return {expenseId:old.id,amount:old.amount,replayed:true};D.expenses.push({id:p.expenseId,groupId:'demo',title:'Возврат долга',amount:p.amount,paidById:'a',splitMode:'EVENLY',paidFor:[{participantId:p.toParticipantId,shares:1}],createdByTgId:1,expenseDate:Date.now(),isReimbursement:1});return {expenseId:p.expenseId,amount:p.amount};}if(name==='participant_sync'){const x=D.participants.find(x=>x.id==='a');x.sbpPhone=p.sbpPhone;x.sbpBank=p.sbpBank;return {participantId:'a'};}if(name==='participant_add'){D.participants.push({id:'p'+Date.now(),name:p.name,tgUserId:null,claimToken:'demo'});return {id:'x',name:p.name};}if(name==='participant_delete'){const person=D.participants.find(x=>x.id===p.participantId);if(!person||person.id==='a')throw Error('Нельзя удалить участника');if(D.expenses.some(e=>e.paidById===person.id||e.paidFor?.some(x=>x.participantId===person.id)))throw Error('Участник есть в расходах');D.participants=D.participants.filter(x=>x.id!==person.id);return {deleted:true};}if(name==='remind_debt'){return {sent:true};}if(name==='participant_leave'){return {left:true};}if(name==='group_delete'){D.expenses=[];D.participants=[];D.group={id:'demo',name:'Удалена',currencyCode:'RUB'};return {deleted:true};}throw Error('Недоступно в демо');}
+async function demoCall(name,p){if(name==='bootstrap')return {user:{id:1,name:'Вы'},groups:[{id:D.group.id,name:D.group.name,currencyCode:D.group.currencyCode}],invitation:null,features:{betaFree:true,billingEnabled:false}};if(name==='group_get'){if(demoFailRefreshArmed){demoFailRefreshArmed=false;throw demoNetworkError();}return demoView();}if(name==='group_create'){D.group={id:'demo',name:p.name,currencyCode:p.currencyCode,information:p.information,inviteToken:'demo_inv',proUntil:0};D.participants=[{id:'a',name:'Вы',tgUserId:1},...p.participants.map((name,i)=>({id:'p'+i,name,tgUserId:null,claimToken:'demo'}))];D.expenses=[];return {groupId:'demo'};}if(name==='expense_upsert'){const id=p.expenseId||'exp_'+(''+Math.random()).replace('0.','').padEnd(36,'0');
+  // Validate the split BEFORE touching demo data: invalid manual
+  // amounts/percentages are rejected, history and balances stay unchanged.
+  splitExpense({id,amount:p.amount,splitMode:p.splitMode,paidFor:p.paidFor});
+  const e={...p,id,createdByTgId:1,expenseDate:Date.now(),isReimbursement:0};D.expenses=D.expenses.filter(x=>x.id!==id).concat(e);
+  // Lost-response hook: the expense is written FIRST, then the network
+  // error is returned — exactly the "request may have gone through" case.
+  if(demoFailLostExpense){demoFailLostExpense=false;throw demoNetworkError();}
+  // Stale-list hook: arm the failure for the group reload that follows
+  // this successful save (not for any earlier group_get).
+  if(demoFailRefreshPending){demoFailRefreshPending=false;demoFailRefreshArmed=true;}
+  return {expenseId:id};}if(name==='expense_delete'){D.expenses=D.expenses.filter(x=>x.id!==p.expenseId);return {deleted:true};}if(name==='settlement_create'){const old=D.expenses.find(e=>e.id===p.expenseId);D.cancelledSettlements??=new Set();if(p.action==='cancel'){if(old)return {expenseId:p.expenseId,amount:old.amount,replayed:true};D.cancelledSettlements.add(p.expenseId);return {expenseId:p.expenseId,amount:p.amount,cancelled:true};}if(D.cancelledSettlements.has(p.expenseId))throw Error('Запись возврата отменена');if(old)return {expenseId:old.id,amount:old.amount,replayed:true};D.expenses.push({id:p.expenseId,groupId:'demo',title:'Возврат долга',amount:p.amount,paidById:'a',splitMode:'EVENLY',paidFor:[{participantId:p.toParticipantId,shares:1}],createdByTgId:1,expenseDate:Date.now(),isReimbursement:1});return {expenseId:p.expenseId,amount:p.amount};}if(name==='participant_sync'){const x=D.participants.find(x=>x.id==='a');x.sbpPhone=p.sbpPhone;x.sbpBank=p.sbpBank;return {participantId:'a'};}if(name==='participant_add'){D.participants.push({id:'p'+Date.now(),name:p.name,tgUserId:null,claimToken:'demo'});return {id:'x',name:p.name};}if(name==='participant_delete'){const person=D.participants.find(x=>x.id===p.participantId);if(!person||person.id==='a')throw Error('Нельзя удалить участника');if(D.expenses.some(e=>e.paidById===person.id||e.paidFor?.some(x=>x.participantId===person.id)))throw Error('Участник есть в расходах');D.participants=D.participants.filter(x=>x.id!==person.id);return {deleted:true};}if(name==='remind_debt'){return {sent:true};}if(name==='participant_leave'){return {left:true};}if(name==='group_delete'){D.expenses=[];D.participants=[];D.group={id:'demo',name:'Удалена',currencyCode:'RUB'};return {deleted:true};}throw Error('Недоступно в демо');}
 function applyTelegramTheme(){
   if(!tg)return;
   const p=tg.themeParams||{};
@@ -503,7 +619,7 @@ function applyTelegramTheme(){
   if(p.button_color)document.documentElement.style.setProperty('--brand',p.button_color);
  if(p.button_text_color)document.documentElement.style.setProperty('--on-brand',p.button_text_color);
 }
-window.__spliitEnhancements = installEnhancements({S,call,render,openGroup});
+window.__spliitEnhancements = installEnhancements({S,call,render,openGroup,modalBack:handleModalBack});
 function applySafeArea(){
  const style=document.documentElement.style;
  for(const side of ['top','right','bottom','left']){

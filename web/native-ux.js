@@ -19,7 +19,7 @@ export const clearSbp=()=>new Promise(resolve=>{
  if(!cloud?.removeItems){resolve(false);return;}
  cloud.removeItems(['spliit_sbp_phone','spliit_sbp_bank'],e=>resolve(!e));
 });
-export function installNativeUX({S}){
+export function installNativeUX({S,closeTopModal}){
  const root=document.getElementById('app'),T=tg();
  // Header/background follow the Telegram theme (themeParams.bg_color)
  // instead of the previously hardcoded dark '#0f172a', which painted the
@@ -35,13 +35,15 @@ export function installNativeUX({S}){
  try{T?.onEvent?.('themeChanged',syncChrome);}catch{}
  let wasProtected=false,backBound=false;
  // System BackButton follows the router: shown on nested screens, hidden
- // on home. onClick does exactly what the HTML ‹ button does.
+ // on home. While a modal is open it closes the top modal first (the
+ // modal back-stack); only the next press navigates. onClick does exactly
+ // what the HTML ‹ button does when no modal is open.
  function syncBackButton(){
   try{
    const B=T?.BackButton;if(!B)return;
    const nested=['group','create','expense','join','invite','settings','pro'].includes(S.page);
    if(nested){
-    if(!backBound){B.onClick?.(()=>{root.querySelector('.back')?.click();});backBound=true;}
+    if(!backBound){B.onClick?.(()=>{if(typeof closeTopModal==='function'&&closeTopModal())return;root.querySelector('.back')?.click();});backBound=true;}
     B.show?.();
    }else B.hide?.();
   }catch{}
