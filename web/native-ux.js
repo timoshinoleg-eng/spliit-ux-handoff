@@ -21,9 +21,33 @@ export const clearSbp=()=>new Promise(resolve=>{
 });
 export function installNativeUX({S}){
  const root=document.getElementById('app'),T=tg();
- try{T?.setHeaderColor?.('#0f172a');T?.setBackgroundColor?.('#0f172a')}catch{}
- let wasProtected=false;
+ // Header/background follow the Telegram theme (themeParams.bg_color)
+ // instead of the previously hardcoded dark '#0f172a', which painted the
+ // Telegram frame dark even in the light theme. No themeParams → leave
+ // the client defaults alone. Re-applied on themeChanged.
+ function syncChrome(){
+  try{
+   const p=T?.themeParams||{};
+   if(p.bg_color){T?.setHeaderColor?.(p.bg_color);T?.setBackgroundColor?.(p.bg_color);}
+  }catch{}
+ }
+ syncChrome();
+ try{T?.onEvent?.('themeChanged',syncChrome);}catch{}
+ let wasProtected=false,backBound=false;
+ // System BackButton follows the router: shown on nested screens, hidden
+ // on home. onClick does exactly what the HTML ‹ button does.
+ function syncBackButton(){
+  try{
+   const B=T?.BackButton;if(!B)return;
+   const nested=['group','create','expense','join','invite','settings','pro'].includes(S.page);
+   if(nested){
+    if(!backBound){B.onClick?.(()=>{root.querySelector('.back')?.click();});backBound=true;}
+    B.show?.();
+   }else B.hide?.();
+  }catch{}
+ }
  function render(){
+  syncChrome();syncBackButton();
   const editing=['expense','create','join','settings'].includes(S.page)||!!root.querySelector('.advanced-modal');
   try{
    if(editing&&!wasProtected){T?.enableClosingConfirmation?.();T?.disableVerticalSwipes?.();wasProtected=true;}

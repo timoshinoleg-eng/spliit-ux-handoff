@@ -40,7 +40,20 @@ async function busy(fn,preserveForm=false){try{S.loading=true;await fn();}catch(
  // not only as a disappearing toast. The user sees what failed and what to do.
  if(preserveForm){const form=root.querySelector('form');if(form){form.querySelectorAll('.form-error').forEach(x=>x.remove());const err=document.createElement('p');err.className='notice error form-error';err.setAttribute('role','alert');err.textContent='Не сохранено: '+errText(e)+'. Проверьте поля и попробуйте ещё раз — введённое не пропало.';form.prepend(err);}}}
  finally{try{await refreshPending();}catch(e){toast(errText(e),true);}S.loading=false;if(!preserveForm)render();else {root.querySelectorAll('button').forEach(x=>x.disabled=false);updateExpensePreview();}}}
-function toast(msg,bad=false){const notice={msg,bad};S.notice=notice;document.querySelectorAll('.toast').forEach(el=>el.remove());const el=document.createElement('div');el.className='toast'+(bad?' error':'');el.setAttribute('role','alert');el.textContent=msg;root.appendChild(el);setTimeout(()=>{if(S.notice===notice){S.notice=null;document.querySelectorAll('.toast').forEach(x=>x.remove());}},3500);}
+function toast(msg,bad=false){const notice={msg,bad};S.notice=notice;document.querySelectorAll('.toast').forEach(el=>el.remove());const el=document.createElement('div');el.className='toast'+(bad?' error':'');el.setAttribute('role','alert');el.textContent=msg;
+ if(bad){
+  // Error toasts never auto-hide after 3.5 s while the keyboard is open:
+  // they stay until the user taps them (✕ marker, pointer-events on).
+  // Tap is the user's explicit choice, so it may close before 8 s;
+  // otherwise the toast lives indefinitely (no auto-dismiss timer).
+  const x=document.createElement('span');x.className='toast-close';x.textContent='✕';x.setAttribute('aria-hidden','true');el.appendChild(x);
+ }else{
+  setTimeout(()=>{if(S.notice===notice){S.notice=null;document.querySelectorAll('.toast').forEach(x=>x.remove());}},3500);
+ }
+ root.appendChild(el);}
+// Tapping an error toast dismisses it (also clears S.notice so the next
+// render() does not resurrect it). Info toasts keep pointer-events:none.
+root.addEventListener('click',e=>{const t=e.target.closest('.toast.error');if(!t)return;S.notice=null;t.remove();});
 function header(){const letter=(S.boot?.user?.name||'Г').charAt(0).toUpperCase();const dark=document.documentElement.classList.contains('tg-dark');const themeBtn=(S.demo&&!tg)?`<button class="btn small ghost theme-toggle" type="button" data-action="theme" aria-label="Переключить тему: сейчас ${dark?'тёмная':'светлая'}" title="Светлая / тёмная тема">${dark?'☀':'☾'}</button>`:'';return `<header class="header"><div class="brand">spliit<span>.</span></div><div class="flex">${S.demo?'<span class="badge demo">ДЕМО</span>':''}${themeBtn}<div class="avatar" title="${esc(S.boot?.user?.name||'Гость')}">${esc(letter)}</div></div></header>`;}
 function bottom(){return `<nav class="footbar"><button class="${S.page==='home'?'active':''}" data-action="home"><b>⌂</b>Группы</button><button class="${S.page==='create'?'active':''}" data-action="create"><b>＋</b>Создать</button><button class="${S.page==='group'?'active':''}" data-action="openCurrent"><b>≡</b>Расходы</button></nav>`;}
 function viewHome(){
@@ -59,15 +72,30 @@ function back(title,subtitle=''){return `<div class="mini-nav"><button class="ba
 function viewCreate(){return `${back('Новая группа','Укажите основные параметры')}<form class="form" id="create-form"><div class="field"><label for="g-name">Название группы</label><input id="g-name" name="name" type="text" autocomplete="off" autocapitalize="sentences" maxlength="80" required aria-label="Название группы" placeholder="Например, Шерегеш 2026"/></div><div class="field"><label for="g-cur">Валюта учёта</label><select id="g-cur" name="currencyCode">${CURRENCIES.map(x=>`<option value="${x}" ${x==='RUB'?'selected':''}>${x} · ${CURRENCY[x]}</option>`).join('')}</select></div><div class="field"><label for="g-desc">Описание (необязательно)</label><textarea id="g-desc" name="information" maxlength="1000" placeholder="Общая поездка или расходы квартиры"></textarea></div><div class="notice">Вы автоматически добавитесь в группу. Чтобы позвать остальных, после создания нажмите «Пригласить» и отправьте ссылку через Telegram. Имена заранее вводить не нужно.</div><button class="btn primary full" type="submit">Создать группу</button></form>`;}
 function viewGroup(){const data=S.group;if(!data)return '<div class="card empty">Загрузка группы…</div>';
  const g=data.group,code=g.currencyCode,balance=data.balances?.[data.me]?.total||0;
- const own=balance<0?'Вы должны':balance>0?'Вам должны':'Долгов нет';
+ const transfers=data.settlements||[];
+ // Balance card names the counterparty: the only one, or the largest one
+ // by amount ("и ещё N" when there are more). The sum shown is still the
+ // user's net total — the name identifies the main counterparty, not the
+ // whole sum. Zero balance stays neutral and unnamed.
+ function mainCounterparty(list,key){
+  const byId=new Map();
+  for(const t of list)byId.set(t[key],(byId.get(t[key])||0)+t.amount);
+  if(!byId.size)return null;
+  const [id,amount]=[...byId.entries()].sort((a,b)=>b[1]-a[1])[0];
+  return {name:data.participants.find(p=>p.id===id)?.name||'Участник',amount,others:byId.size-1};
+ }
+ const cp=balance<0?mainCounterparty(transfers.filter(t=>t.from===data.me),'to'):balance>0?mainCounterparty(transfers.filter(t=>t.to===data.me),'from'):null;
+ const cpSuffix=cp&&cp.others?` и ещё ${cp.others}`:'';
+ const own=balance<0?(cp?`Вы должны: ${esc(cp.name)}${cpSuffix}`:'Вы должны'):balance>0?(cp?`Вам должны: ${esc(cp.name)}${cpSuffix}`:'Вам должны'):'Долгов нет';
  const balanceClass=balance<0?'negative':balance>0?'positive':'muted';
+ const settleBtn=cp?`<button class="btn small ghost" type="button" data-action="tab" data-tab="balances">Рассчитаться →</button>`:'';
  // Entry-mode switcher (demo only): A = history with visible balance,
  // B = settlements on the first screen. Default A; the choice persists.
  const entrySwitch=S.demo?`<div class="entry-switch" role="group" aria-label="Первый экран группы"><span>Первый экран:</span><button type="button" class="entry-btn ${S.entryMode==='history'?'active':''}" data-action="entryMode" data-mode="history" aria-pressed="${S.entryMode==='history'}">История</button><button type="button" class="entry-btn ${S.entryMode==='settlements'?'active':''}" data-action="entryMode" data-mode="settlements" aria-pressed="${S.entryMode==='settlements'}">Расчёты</button></div>`:'';
- return `${back(g.name,`${data.participants.length} участников · ${code}`)}<div class="summary"><div class="metric"><span>${own}</span><strong class="${balanceClass}">${signedMoney(balance,code)}</strong></div><div class="metric"><span>Всего расходов</span><strong>${money((data.expenses||[]).filter(e=>!e.isReimbursement).reduce((a,b)=>a+b.amount,0),code)}</strong></div></div>
+ return `${back(g.name,`${data.participants.length} участников · ${code}`)}<div class="summary"><div class="metric"><span>${own}</span><strong class="${balanceClass}">${signedMoney(balance,code)}</strong>${settleBtn}</div><div class="metric"><span>Всего расходов</span><strong>${money((data.expenses||[]).filter(e=>!e.isReimbursement).reduce((a,b)=>a+b.amount,0),code)}</strong></div></div>
  ${entrySwitch}
  <div class="actions group-primary"><button class="btn primary" data-action="expense">+ Добавить трату</button><button class="btn ghost" data-action="invite">Пригласить</button></div>
- <div class="tabs">${[['expenses','Расходы'],['balances','Долги'],['members','Участники']].map(([t,label])=>`<button class="tab ${S.tab===t?'active':''}" data-action="tab" aria-pressed="${S.tab===t}" data-tab="${t}">${label}</button>`).join('')}</div>
+ <div class="tabs">${[['expenses','Расходы'],['balances','Долги'],['members','Участники']].map(([t,label])=>`<button class="tab ${S.tab===t?'active':''}" data-action="tab" aria-pressed="${S.tab===t}" data-tab="${t}">${label}${t==='members'?'':` (${t==='expenses'?data.expenses.length:transfers.length})`}</button>`).join('')}</div>
  ${recoveryPanel(data)}${S.tab==='expenses'?renderExpenses(data):S.tab==='balances'?renderBalances(data):renderMembers(data)}
  <details class="group-tools"><summary>Ещё действия с группой</summary><div class="group-tools-content">
  ${extrasEnabled()?'<button class="btn ghost" data-action="exportCsv">Скачать расходы для Excel</button>':''}</div></details>`;
@@ -85,7 +113,22 @@ async function refreshPending(){
  let pending,error;try{pending=await pendingSettlement(S);}catch(e){error=errText(e);}
  if(S.groupId===groupId&&S.group?.me===member&&S.boot?.user?.id===uid){S.pendingSettlement=pending;S.settlementStorageError=error;}
 }
-function renderExpenses(d){return d.expenses.length?`<div class="stack">${d.expenses.map(e=>{const payer=d.participants.find(p=>p.id===e.paidById)?.name||'Участник';return `<div class="card expense"><div class="expense-icon">${e.isReimbursement?'⇄':'◈'}</div><div style="flex:1;min-width:0"><strong>${esc(e.title)}</strong><small>${esc(payer)} · ${fmtDate(e.expenseDate)}</small></div><div class="amount">${money(e.amount,d.group.currencyCode)}${(e.createdByTgId===S.boot?.user?.id||d.isCreator)?`<div><button class="btn small ghost" data-action="${e.isReimbursement?'deleteExpenseDirect':'editExpense'}" data-id="${esc(e.id)}">${e.isReimbursement?'Удалить':'Изменить'}</button></div>`:''}</div></div>`}).join('')}</div>`:'<div class="card empty"><p>Расходов пока нет. Добавьте первый чек — Spleet сразу посчитает доли.</p><button class="btn primary" data-action="expense">Добавить первую трату</button></div>';}
+// My share of one expense, via the same Hamilton split as the form.
+// Returns undefined when the split cannot be computed (bad stored data)
+// or when the current user is not among the participants — then the
+// share line is simply not shown instead of breaking the render.
+function myShare(d,e){
+ try{
+  const shares=splitExpense({id:e.id,amount:e.amount,splitMode:e.splitMode,paidFor:e.paidFor});
+  return shares.find(s=>s.participantId===d.me)?.amount;
+ }catch{return undefined;}
+}
+function renderExpenses(d){return d.expenses.length?`<div class="stack">${d.expenses.map(e=>{const payer=d.participants.find(p=>p.id===e.paidById)?.name||'Участник';
+ const count=(e.paidFor||[]).filter(p=>p.shares>0).length;
+ let shareLine='';
+ if(e.isReimbursement)shareLine='<small>Возврат долга</small>';
+ else{const mine=myShare(d,e);if(mine!==undefined)shareLine=`<small>На ${count} чел. · Ваша доля: ${money(mine,d.group.currencyCode)}</small>`;}
+ return `<div class="card expense"><div class="expense-icon">${e.isReimbursement?'⇄':'◈'}</div><div style="flex:1;min-width:0"><strong>${esc(e.title)}</strong><small>${esc(payer)} · ${fmtDate(e.expenseDate)}</small>${shareLine}</div><div class="amount">${money(e.amount,d.group.currencyCode)}${(e.createdByTgId===S.boot?.user?.id||d.isCreator)?`<div><button class="btn small ghost" data-action="${e.isReimbursement?'deleteExpenseDirect':'editExpense'}" data-id="${esc(e.id)}">${e.isReimbursement?'Удалить':'Изменить'}</button></div>`:''}</div></div>`}).join('')}</div>`:'<div class="card empty"><p>Расходов пока нет. Добавьте первый чек — Spleet сразу посчитает доли.</p><button class="btn primary" data-action="expense">Добавить первую трату</button></div>';}
 function renderBalances(data){
  const transfers=data.settlements||[];
  if(!transfers.length)return '<div class="card empty">Долгов нет. Все расчёты закрыты.</div>';
@@ -157,8 +200,40 @@ function updateExpensePreview(){
   const payload=expensePayload();
   const names=new Map(S.group.participants.map(person=>[person.id,person.name]));
   const shares=splitExpense({...payload,id:payload.expenseId});
-  target.innerHTML=`<ul>${shares.map(share=>`<li><span>${esc(names.get(share.participantId))}</span><strong>${esc(money(share.amount,S.group.group.currencyCode))}</strong></li>`).join('')}</ul>`;
- }catch(error){note(error.message);}
+  const total=shares.reduce((a,s)=>a+s.amount,0);
+  // Control line: the split must add up to the check. splitExpense
+  // guarantees this for valid input; the mismatch branch is defensive.
+  const check=total===payload.amount
+   ?`<p class="allocation-total">Распределено: ${money(total,S.group.group.currencyCode)} из ${money(payload.amount,S.group.group.currencyCode)}</p>`
+   :`<p class="allocation-total error">Распределено: ${money(total,S.group.group.currencyCode)} из ${money(payload.amount,S.group.group.currencyCode)} · не сходится на ${money(Math.abs(total-payload.amount),S.group.group.currencyCode)}</p>`;
+  target.innerHTML=`<ul>${shares.map(share=>`<li><span>${esc(names.get(share.participantId))}</span><strong>${esc(money(share.amount,S.group.group.currencyCode))}</strong></li>`).join('')}</ul>${check}`;
+ }catch(error){const msg=String(error.message||error);note((msg.endsWith('.')?msg:msg+'.')+allocationShortfall(form));}
+}
+// When the split does not add up (BY_AMOUNT / BY_PERCENTAGE), say how much
+// is missing instead of a bare validation error. Returns '' when the
+// shortfall cannot be computed from the form (e.g. bad amount input).
+function allocationShortfall(form){
+ try{
+  const mode=form.elements.splitMode.value;
+  const selected=[...form.querySelectorAll('#paidfor-list .check-item')].filter(row=>row.querySelector('input[type=checkbox]').checked);
+  const weightOf=row=>{const v=String(row.querySelector('input[type=number]').value).replace(',','.');return /^\d+(\.\d{1,2})?$/.test(v)?Math.round(Number(v)*100):NaN;};
+  if(mode==='BY_PERCENTAGE'){
+   const sum=selected.reduce((a,row)=>{const n=weightOf(row);return a+(Number.isFinite(n)?n:0);},0);
+   const diff=10000-sum;
+   if(diff===0)return '';
+   const fmt=n=>(n/100).toLocaleString('ru-RU',{minimumFractionDigits:2,maximumFractionDigits:2});
+   return ` Сейчас: ${fmt(sum)}% из 100%. `+(diff>0?`Не хватает: ${fmt(diff)}%.`:`Перебор: ${fmt(-diff)}%.`);
+  }
+  if(mode==='BY_AMOUNT'){
+   const amount=amountInt(form.elements.amount.value);
+   const code=S.group.group.currencyCode;
+   const sum=selected.reduce((a,row)=>{const n=weightOf(row);return a+(Number.isFinite(n)?n:0);},0);
+   const diff=amount-sum;
+   if(diff===0)return '';
+   return ` Сейчас: ${money(sum,code)} из ${money(amount,code)}. `+(diff>0?`Не хватает: ${money(diff,code)}.`:`Перебор: ${money(-diff,code)}.`);
+  }
+ }catch{}
+ return '';
 }
 function updateSplitControls(reset){
  const form=root.querySelector('#expense-form');
@@ -196,7 +271,7 @@ function render(){document.body.classList.toggle('spliit-form-open',['expense','
  const screen=S.page==='group'?`group:${S.groupId}`:S.page;
  const moved=renderedScreen!==screen;
  renderedScreen=screen;
- root.innerHTML=`<main class="page">${header()}${body}</main>${bottom()}${S.notice?`<div role="alert" class="toast ${S.notice.bad?'error':''}">${esc(S.notice.msg)}</div>`:''}`;
+ root.innerHTML=`<main class="page">${header()}${body}</main>${bottom()}${S.notice?`<div role="alert" class="toast ${S.notice.bad?'error':''}">${esc(S.notice.msg)}${S.notice.bad?'<span class="toast-close" aria-hidden="true">✕</span>':''}</div>`:''}`;
  document.querySelectorAll('button').forEach(x=>x.disabled=!!S.loading);
  window.__spliitEnhancements?.render?.();
  updateExpensePreview();
@@ -231,6 +306,75 @@ async function applyReceiptQr(qr){
    toast('Чек в RUB пересчитан в '+to+' ('+rate.source+'). Проверьте курс перед сохранением.');
  }
  haptic();
+}
+// Settlement confirmation modal (replaces window.confirm for 'settle').
+// Lives on document.body so app render() never destroys it mid-flow.
+// Reuses the .advanced-modal/.advanced-panel surfaces from advanced-ui.
+let settleModal=null,settleReturnFocus=null;
+function openSettleModal({to,amount}){
+ closeSettleModal();
+ const data=S.group,code=data.group.currencyCode;
+ const recipient=data.participants.find(p=>p.id===to);
+ const name=recipient?.name||'Участник';
+ const phone=recipient?.sbpPhone||'',bank=recipient?.sbpBank||'';
+ const box=document.createElement('div');
+ box.className='advanced-modal settle-modal';
+ box.setAttribute('role','dialog');box.setAttribute('aria-modal','true');box.setAttribute('aria-labelledby','settle-title');
+ box.innerHTML=`<section class="advanced-panel settle-panel"><div class="advanced-head"><h2 id="settle-title">Подтвердить возврат</h2><button class="btn small ghost" type="button" data-settle="close" aria-label="Закрыть окно">✕</button></div>
+ <p class="settle-route"><strong>Вы → ${esc(name)}</strong></p>
+ <p class="settle-amount">${money(amount,code)}</p>
+ ${phone?`<div class="field"><span class="field-label">Сначала переведите в своём банке по СБП</span><div class="settle-sbp"><span>${esc(phone)}${bank?' · '+esc(bank):''}</span><button class="btn small ghost" type="button" data-settle="copy">Скопировать номер</button></div></div>`:`<p class="form-hint">Реквизиты СБП получателя не указаны — уточните номер у ${esc(name)} и переведите в своём банке.</p>`}
+ <p class="form-hint">Нажимайте «Подтвердить возврат», только когда деньги уже переведены: запись появится в истории группы.</p>
+ <div class="advanced-actions"><button class="btn primary" type="button" data-settle="confirm">Подтвердить возврат</button><button class="btn ghost" type="button" data-settle="close">Отмена</button></div></section>`;
+ document.body.appendChild(box);
+ settleModal=box;
+ settleReturnFocus=document.activeElement;
+ const focusables=()=>[...box.querySelectorAll('button:not([disabled])')];
+ box.addEventListener('keydown',e=>{
+  if(e.key==='Escape'){e.preventDefault();closeSettleModal();return;}
+  if(e.key==='Tab'){
+   const f=focusables();if(!f.length)return;
+   const first=f[0],last=f[f.length-1];
+   if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}
+   else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();}
+  }
+ });
+ box.addEventListener('click',e=>{
+  if(e.target===box){closeSettleModal();return;}
+  const b=e.target.closest('[data-settle]');if(!b)return;
+  const action=b.dataset.settle;
+  if(action==='close'){closeSettleModal();return;}
+  if(action==='copy'){copySbpNumber(phone,b);return;}
+  if(action==='confirm'){
+   closeSettleModal();
+   busy(async()=>{
+    await recordSettlement({S,call,toParticipantId:to,amount});
+    try{await openGroup(S.groupId);}catch{S.group=null;S.page='home';toast('Возврат записан. Не удалось обновить расчёты; откройте группу повторно.');}
+    haptic();
+   });
+   return;
+  }
+ });
+ box.querySelector('[data-settle="confirm"]')?.focus();
+}
+function closeSettleModal(){
+ if(!settleModal)return;
+ settleModal.remove();settleModal=null;
+ if(settleReturnFocus?.focus)settleReturnFocus.focus();
+ settleReturnFocus=null;
+}
+async function copySbpNumber(phone,btn){
+ let ok=false;
+ try{await navigator.clipboard.writeText(phone);ok=true;}
+ catch{
+  // Clipboard API may be unavailable (non-secure context, permissions):
+  // fall back to selecting a temporary field.
+  try{const ta=document.createElement('textarea');ta.value=phone;ta.setAttribute('readonly','');ta.style.position='fixed';ta.style.opacity='0';document.body.appendChild(ta);ta.select();ok=document.execCommand('copy');ta.remove();}catch{ok=false;}
+ }
+ if(!btn)return;
+ const label=btn.textContent;
+ btn.textContent=ok?'Скопировано ✓':'Не удалось скопировать';
+ if(ok){btn.disabled=true;setTimeout(()=>{btn.textContent=label;btn.disabled=false;},1600);}
 }
 root.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(!b)return;const action=b.dataset.action;if(['settle','recoverSettlement','cancelSettlement'].includes(action)&&S.loading)return;busy(async()=>{
  if(action==='home'){await loadHome();return;}
@@ -273,7 +417,7 @@ root.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(!
    }else{await recordSettlement({S,call,toParticipantId:pending.toParticipantId,amount:pending.amount});toast('Возврат записан.');}
    try{await openGroup(S.groupId);}catch{S.group=null;S.page='home';toast('Результат подтверждён. Откройте группу повторно.');}return;
  }
- if(action==='settle'){if(!confirm(`Деньги уже переведены? Сохранить возврат на ${money(Number(b.dataset.amount),S.group.group.currencyCode)} в истории группы?`))return;await recordSettlement({S,call,toParticipantId:b.dataset.to,amount:Number(b.dataset.amount)});try{await openGroup(S.groupId);}catch{S.group=null;S.page='home';toast('Возврат записан. Не удалось обновить расчёты; откройте группу повторно.');}haptic();return;}
+ if(action==='settle'){openSettleModal({to:b.dataset.to,amount:Number(b.dataset.amount)});return;}
  if(action==='remind'){if(!confirm('Напомнить участнику о долге в личном сообщении Telegram? Не чаще одного раза в 24 часа.'))return;await call('remind_debt',{groupId:S.groupId,debtorId:b.dataset.debtor});toast('Напоминание отправлено');return;}
  if(action==='join'){S.page='join';return;}
  if(action==='invite'){S.page='invite';return;}
@@ -301,6 +445,12 @@ root.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(!
 root.addEventListener('input',event=>{
  if(event.target.closest('#expense-form')&&event.target.type!=='checkbox'&&event.target.tagName!=='SELECT')updateExpensePreview();
 });
+// Hide the bottom bar while the on-screen keyboard is likely open: any
+// editable field focused. Form screens already hide it via the
+// spliit-form-open class; this covers fields elsewhere (e.g. modals).
+const kbField=el=>el?.matches?.('input:not([type=checkbox]):not([type=radio]):not([readonly]),textarea,select');
+root.addEventListener('focusin',e=>{if(kbField(e.target))document.body.classList.add('spliit-kb-open');});
+root.addEventListener('focusout',e=>{if(!kbField(e.relatedTarget))document.body.classList.remove('spliit-kb-open');});
 root.addEventListener('change',event=>{
  const input=event.target;
  if(input.id==='qr-photo'){
@@ -333,7 +483,14 @@ root.addEventListener('submit',e=>{e.preventDefault();if(S.loading)return;const 
  });});
 // Isolated local demo store. Never synced with the cloud or used for payments.
 const D={group:{id:'demo',name:'Выходные у моря',currencyCode:'RUB',inviteToken:'demo_inv',proUntil:0},participants:[{id:'a',name:'Вы',tgUserId:1,sbpPhone:null,sbpBank:null},{id:'b',name:'Анна',tgUserId:2,sbpPhone:'+79990000000',sbpBank:'Т-Банк'},{id:'c',name:'Иван',tgUserId:3,sbpPhone:null,sbpBank:null}], expenses:[{id:'exp_000000000000000000000000000000000001',groupId:'demo',title:'Ужин у моря',amount:540000,paidById:'b',splitMode:'EVENLY',paidFor:[{participantId:'a',shares:1},{participantId:'b',shares:1},{participantId:'c',shares:1}],createdByTgId:2,expenseDate:Date.now()-86400000,createdAt:Date.now()-86400000,isReimbursement:0}]};
-function demoView(){const totals=Object.fromEntries(D.participants.map(x=>[x.id,{paid:0,paidFor:0,total:0}]));for(const e of D.expenses){totals[e.paidById].paid+=e.amount;const shares=e.paidFor.filter(p=>p.shares>0),sum=shares.reduce((a,b)=>a+b.shares,0);let left=e.amount;shares.forEach((p,i)=>{const q=i===shares.length-1?left:Math.floor(e.amount*p.shares/sum);totals[p.participantId].paidFor+=q;left-=q;});}for(const x of Object.values(totals))x.total=x.paid-x.paidFor;const debts=Object.entries(totals).map(([id,v])=>({id,total:v.total})).filter(x=>x.total<0),credits=Object.entries(totals).map(([id,v])=>({id,total:v.total})).filter(x=>x.total>0),transfers=[];for(const debt of debts)for(const credit of credits){const amount=Math.min(-debt.total,credit.total);if(amount>0){transfers.push({from:debt.id,to:credit.id,amount});debt.total+=amount;credit.total-=amount;}}return {group:{...D.group},me:'a',isCreator:true,participants:D.participants,expenses:[...D.expenses].reverse(),balances:totals,settlements:transfers,activities:[]};}
+function demoView(){const totals=Object.fromEntries(D.participants.map(x=>[x.id,{paid:0,paidFor:0,total:0}]));for(const e of D.expenses){totals[e.paidById].paid+=e.amount;
+ // Demo engine uses the same Hamilton split as the expense form
+ // (splitExpense), so demo balances never diverge from real ones.
+ // Fallback keeps the old floor method for malformed stored data.
+ let shares=null;try{shares=splitExpense({id:e.id,amount:e.amount,splitMode:e.splitMode,paidFor:e.paidFor});}catch{}
+ if(shares){for(const s of shares)totals[s.participantId].paidFor+=s.amount;}
+ else{const parts=e.paidFor.filter(p=>p.shares>0),sum=parts.reduce((a,b)=>a+b.shares,0);let left=e.amount;parts.forEach((p,i)=>{const q=i===parts.length-1?left:Math.floor(e.amount*p.shares/sum);totals[p.participantId].paidFor+=q;left-=q;});}
+}for(const x of Object.values(totals))x.total=x.paid-x.paidFor;const debts=Object.entries(totals).map(([id,v])=>({id,total:v.total})).filter(x=>x.total<0),credits=Object.entries(totals).map(([id,v])=>({id,total:v.total})).filter(x=>x.total>0),transfers=[];for(const debt of debts)for(const credit of credits){const amount=Math.min(-debt.total,credit.total);if(amount>0){transfers.push({from:debt.id,to:credit.id,amount});debt.total+=amount;credit.total-=amount;}}return {group:{...D.group},me:'a',isCreator:true,participants:D.participants,expenses:[...D.expenses].reverse(),balances:totals,settlements:transfers,activities:[]};}
 async function demoCall(name,p){if(name==='bootstrap')return {user:{id:1,name:'Вы'},groups:[{id:D.group.id,name:D.group.name,currencyCode:D.group.currencyCode}],invitation:null,features:{betaFree:true,billingEnabled:false}};if(name==='group_get')return demoView();if(name==='group_create'){D.group={id:'demo',name:p.name,currencyCode:p.currencyCode,information:p.information,inviteToken:'demo_inv',proUntil:0};D.participants=[{id:'a',name:'Вы',tgUserId:1},...p.participants.map((name,i)=>({id:'p'+i,name,tgUserId:null,claimToken:'demo'}))];D.expenses=[];return {groupId:'demo'};}if(name==='expense_upsert'){const id=p.expenseId||'exp_'+(''+Math.random()).replace('0.','').padEnd(36,'0');const e={...p,id,createdByTgId:1,expenseDate:Date.now(),isReimbursement:0};D.expenses=D.expenses.filter(x=>x.id!==id).concat(e);return {expenseId:id};}if(name==='expense_delete'){D.expenses=D.expenses.filter(x=>x.id!==p.expenseId);return {deleted:true};}if(name==='settlement_create'){const old=D.expenses.find(e=>e.id===p.expenseId);D.cancelledSettlements??=new Set();if(p.action==='cancel'){if(old)return {expenseId:p.expenseId,amount:old.amount,replayed:true};D.cancelledSettlements.add(p.expenseId);return {expenseId:p.expenseId,amount:p.amount,cancelled:true};}if(D.cancelledSettlements.has(p.expenseId))throw Error('Запись возврата отменена');if(old)return {expenseId:old.id,amount:old.amount,replayed:true};D.expenses.push({id:p.expenseId,groupId:'demo',title:'Возврат долга',amount:p.amount,paidById:'a',splitMode:'EVENLY',paidFor:[{participantId:p.toParticipantId,shares:1}],createdByTgId:1,expenseDate:Date.now(),isReimbursement:1});return {expenseId:p.expenseId,amount:p.amount};}if(name==='participant_sync'){const x=D.participants.find(x=>x.id==='a');x.sbpPhone=p.sbpPhone;x.sbpBank=p.sbpBank;return {participantId:'a'};}if(name==='participant_add'){D.participants.push({id:'p'+Date.now(),name:p.name,tgUserId:null,claimToken:'demo'});return {id:'x',name:p.name};}if(name==='participant_delete'){const person=D.participants.find(x=>x.id===p.participantId);if(!person||person.id==='a')throw Error('Нельзя удалить участника');if(D.expenses.some(e=>e.paidById===person.id||e.paidFor?.some(x=>x.participantId===person.id)))throw Error('Участник есть в расходах');D.participants=D.participants.filter(x=>x.id!==person.id);return {deleted:true};}if(name==='remind_debt'){return {sent:true};}if(name==='participant_leave'){return {left:true};}if(name==='group_delete'){D.expenses=[];D.participants=[];D.group={id:'demo',name:'Удалена',currencyCode:'RUB'};return {deleted:true};}throw Error('Недоступно в демо');}
 function applyTelegramTheme(){
   if(!tg)return;
