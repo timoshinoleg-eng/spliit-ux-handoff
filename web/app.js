@@ -49,7 +49,17 @@ async function call(name,input={}){
  if(S.demo)return demoCall(name,input);
  const srv=tg?.Serverless;
  if(typeof srv?.call!=='function')throw Error('Откройте Spleet через бота в Telegram или попробуйте демоверсию');
- return new Promise((resolve,reject)=>srv.call(name,input,(error,data)=>error?reject(new Error(error.message||error.type||'Ошибка API')):resolve(data)));
+ return new Promise((resolve,reject)=>srv.call(name,input,(error,data)=>{
+  if(error){
+   // Keep the server's error shape, not just its text: the lost-response
+   // detection checks e.type/e.code === 'NETWORK_ERROR', and a localized
+   // message alone (e.g. 'Связь прервана') carries no such marker.
+   const e=new Error(error.message||error.type||'Ошибка API');
+   if(error.type)e.type=error.type;
+   if(error.code)e.code=error.code;
+   reject(e);
+  } else resolve(data);
+ }));
 }
 async function busy(fn,preserveForm=false){try{S.loading=true;await fn();}catch(e){
  // Errors with .handled=true were already shown precisely by the code that
@@ -478,6 +488,10 @@ root.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(!
    const data=await call('group_get',{groupId:u.groupId});
    const found=(data.expenses||[]).find(e=>e.id===u.expenseId);
    if(found){
+    // An edit reuses an existing ID, so "found" alone proves nothing:
+    // the stored record may be the OLD version (the edit never arrived).
+    // Confirm the submitted changes, not just the ID.
+    if(!expenseMatchesPayload(found,u)){showExpenseSaveStatus({kind:'lostStale',payload:u});throw handledError();}
     S.uncheckedExpense=null;S.edit=null;S.newExpenseId=null;
     S.group=data;S.groupId=u.groupId;S.page='group';S.tab='expenses';
     await refreshPending();
@@ -542,13 +556,32 @@ root.addEventListener('change',event=>{
  if(input.id==='e-mode'||input.name==='participant')updateSplitControls(input.id==='e-mode');
  else updateExpensePreview();
 });
-// Precise save status for the expense form. Three cases, three texts:
+// Precise save status for the expense form. Four cases, four texts:
 // - rejected: local validation or the server refused with a reason;
 // - lost: the network broke mid-request, the result is unknown;
+// - lostStale: the check found the record, but it is the OLD version —
+//   the submitted edit is not confirmed (see expenseMatchesPayload);
 // - confirmed-but-stale: the record is saved, the list failed to reload
 //   (handled in the submit flow via S.saveConfirmed, not here).
 // The panel names the concrete expense, keeps the form fields, and — for
 // the lost case — offers a way to check the result with the same expense ID.
+// Does the stored record match the submitted edit? Compares the fields
+// that define the edit in the stored shape: title, amount in kopecks,
+// payer, splitMode enum, and shares per participant (order-insensitive).
+// Lookup by ID is not a match by itself — an edit reuses an existing ID.
+// Anything unconfirmed fails closed: the caller keeps the form open.
+function expenseMatchesPayload(found,payload){
+ if(!found||!payload)return false;
+ if(found.title!==payload.title)return false;
+ if(Number(found.amount)!==Number(payload.amount))return false;
+ if(found.paidById!==payload.paidById)return false;
+ if(found.splitMode!==payload.splitMode)return false;
+ const sharesOf=list=>{const m=new Map();for(const s of (list||[]))m.set(s.participantId,Number(s.shares)||0);return m;};
+ const a=sharesOf(found.paidFor),b=sharesOf(payload.paidFor);
+ if(a.size!==b.size)return false;
+ for(const [id,v] of a)if(b.get(id)!==v)return false;
+ return true;
+}
 function showExpenseSaveStatus({kind,message,payload}){
  const form=root.querySelector('#expense-form');if(!form)return;
  form.querySelectorAll('.save-status').forEach(x=>x.remove());
@@ -561,6 +594,8 @@ function showExpenseSaveStatus({kind,message,payload}){
   box.innerHTML=`<strong>Трата «${esc(title)}» не сохранена.</strong><p>${esc(message||'Сервер отклонил запись.')} Исправьте данные и отправьте ещё раз — введённое не пропало.</p>`;
  }else if(kind==='lost'){
   box.innerHTML=`<strong>Не удалось проверить, сохранилась ли трата</strong><p>Сеть оборвалась, когда мы отправляли трату «${esc(title)}»${amount?` (${esc(amount)})`:''}. Возможно, она уже сохранена — сначала проверьте, а потом отправляйте ещё раз.</p><div class="actions"><button class="btn primary" type="button" data-action="checkExpenseSaved">Проверить, сохранилась ли трата</button></div><p class="form-hint">Повторная отправка идёт с тем же номером траты: второй строки не появится, но запись может обновиться.</p>`;
+ }else if(kind==='lostStale'){
+  box.innerHTML=`<strong>Найдена прежняя версия траты «${esc(title)}».</strong><p>Отправленная правка не подтверждена: в группе пока хранятся старые данные${amount?` — вы отправляли «${esc(title)}» (${esc(amount)})`:''}. Проверьте поля и отправьте ещё раз — введённое не пропало.</p><div class="actions"><button class="btn primary" type="button" data-action="checkExpenseSaved">Проверить ещё раз</button></div>`;
  }else if(kind==='lostNotFound'){
   box.innerHTML=`<strong>Траты «${esc(title)}» в группе нет.</strong><p>Отправьте её ещё раз — будет использован тот же номер траты, второй строки не появится.</p><div class="actions"><button class="btn ghost" type="button" data-action="checkExpenseSaved">Проверить ещё раз</button></div>`;
  }else if(kind==='lostCheckFailed'){
@@ -582,7 +617,7 @@ root.addEventListener('submit',e=>{e.preventDefault();if(S.loading)return;const 
   catch(e){showExpenseSaveStatus({kind:'rejected',message:errText(e)});toast(errText(e),true);throw handledError();}
   try{await call('expense_upsert',payload);}
   catch(e){
-   if(isNetworkError(e)){S.uncheckedExpense={expenseId:payload.expenseId,groupId:payload.groupId,title:payload.title,amount:payload.amount};showExpenseSaveStatus({kind:'lost',payload});throw handledError();}
+   if(isNetworkError(e)){S.uncheckedExpense={...payload};showExpenseSaveStatus({kind:'lost',payload});throw handledError();}
    showExpenseSaveStatus({kind:'rejected',message:errText(e),payload});toast(errText(e),true);throw handledError();
   }
   S.edit=null;S.newExpenseId=null;S.uncheckedExpense=null;
@@ -610,6 +645,15 @@ const demoInvite=demoFailParams.get('demoInvite')==='1';
 let demoFailLostExpense=demoFailParams.get('demoFail')==='lostExpense';
 let demoFailRefreshPending=demoFailParams.get('demoFail')==='refreshFail';
 let demoFailRefreshArmed=false;
+// Round 5 hooks: lostEditBefore throws before the write (the stored record
+// is untouched); lostEditAfter writes first, then throws. networkLocalized
+// throws the localized network error shape the fixed Serverless wrapper
+// produces ({type:'NETWORK_ERROR', message:'Связь прервана'}); rejected
+// simulates an explicit server refusal of valid data.
+let demoFailLostEditBefore=demoFailParams.get('demoFail')==='lostEditBefore';
+let demoFailLostEditAfter=demoFailParams.get('demoFail')==='lostEditAfter';
+let demoFailNetworkLocalized=demoFailParams.get('demoFail')==='networkLocalized';
+let demoFailRejected=demoFailParams.get('demoFail')==='rejected';
 const demoNetworkError=()=>{const e=new Error('NETWORK_ERROR');e.code='NETWORK_ERROR';return e;};
 function demoView(){const totals=Object.fromEntries(D.participants.map(x=>[x.id,{paid:0,paidFor:0,total:0}]));for(const e of D.expenses){totals[e.paidById].paid+=e.amount;
  // One split engine: the same Hamilton splitExpense as the form, with
@@ -622,10 +666,18 @@ async function demoCall(name,p){if(name==='bootstrap')return {user:{id:1,name:'�
   // Validate the split BEFORE touching demo data: invalid manual
   // amounts/percentages are rejected, history and balances stay unchanged.
   splitExpense({id,amount:p.amount,splitMode:p.splitMode,paidFor:p.paidFor});
+  // Pre-write failure hooks (round 5): the request was formed and
+  // validated, then failed before the write — the stored record is
+  // untouched. networkLocalized carries type+code, exactly as the fixed
+  // Serverless wrapper passes a {type,message} error through.
+  if(demoFailLostEditBefore){demoFailLostEditBefore=false;throw demoNetworkError();}
+  if(demoFailNetworkLocalized){demoFailNetworkLocalized=false;const e=new Error('Связь прервана');e.type='NETWORK_ERROR';e.code='NETWORK_ERROR';throw e;}
+  if(demoFailRejected){demoFailRejected=false;const e=new Error('Сервер отклонил запись: сумма превышает лимит группы');e.type='VALIDATION_ERROR';throw e;}
   const e={...p,id,createdByTgId:1,expenseDate:Date.now(),isReimbursement:0};D.expenses=D.expenses.filter(x=>x.id!==id).concat(e);
   // Lost-response hook: the expense is written FIRST, then the network
   // error is returned — exactly the "request may have gone through" case.
   if(demoFailLostExpense){demoFailLostExpense=false;throw demoNetworkError();}
+  if(demoFailLostEditAfter){demoFailLostEditAfter=false;throw demoNetworkError();}
   // Stale-list hook: arm the failure for the group reload that follows
   // this successful save (not for any earlier group_get).
   if(demoFailRefreshPending){demoFailRefreshPending=false;demoFailRefreshArmed=true;}
