@@ -41,7 +41,7 @@ export function installNativeUX({S,closeTopModal}){
  function syncBackButton(){
   try{
    const B=T?.BackButton;if(!B)return;
-   const nested=['group','create','expense','join','invite','settings','pro'].includes(S.page);
+   const nested=['group','create','expense','join','invite','settings','pro','demoInvite'].includes(S.page);
    if(nested){
     if(!backBound){B.onClick?.(()=>{if(typeof closeTopModal==='function'&&closeTopModal())return;root.querySelector('.back')?.click();});backBound=true;}
     B.show?.();

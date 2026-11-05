@@ -146,3 +146,31 @@ h1[tabindex='-1']:focus { outline: none; }
 .save-status .actions{margin-top:10px}
 .spliit-kb-open .footbar{display:none}
 .spliit-kb-open .page{padding-bottom:calc(32px + env(safe-area-inset-bottom,0px))}
+
+/* Round 4: three-screen mockup — compact history list (Kobbe), invite hero,
+   settle modal motion. */
+.amount{font-variant-numeric:tabular-nums}
+.allocation-preview li strong{font-variant-numeric:tabular-nums}
+.expense-list{background:var(--white);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden}
+.expense-list .expense{margin-bottom:0;padding:12px 14px}
+.expense-list .expense+.expense{border-top:1px solid var(--border)}
+.expense-list .expense-icon{width:36px;height:36px;font-size:18px}
+.btn{transition:filter .13s,transform .1s}
+.btn:active{transform:scale(.98);filter:brightness(.94)}
+@keyframes settle-in{from{opacity:0}to{opacity:1}}
+@keyframes settle-panel-in{from{opacity:0;transform:translateY(10px) scale(.985)}to{opacity:1;transform:none}}
+.settle-modal{animation:settle-in .18s ease-out}
+.settle-modal .advanced-panel{animation:settle-panel-in .18s ease-out}
+@media (prefers-reduced-motion:reduce){.settle-modal,.settle-modal .advanced-panel{animation:none}.btn{transition:none}}
+.invite-screen{background:radial-gradient(120% 70% at 12% 0%,#cfe0ff 0%,transparent 55%),radial-gradient(90% 60% at 92% 8%,#c8f2e0 0%,transparent 55%),radial-gradient(130% 90% at 50% 115%,#e6efff 0%,transparent 60%),linear-gradient(180deg,#f3f7ff,#eef3fb)}
+.tg-dark .invite-screen{background:radial-gradient(120% 70% at 12% 0%,#1d3355 0%,transparent 55%),radial-gradient(90% 60% at 92% 8%,#173a30 0%,transparent 55%),radial-gradient(130% 90% at 50% 115%,#16283f 0%,transparent 60%),linear-gradient(180deg,#131c28,#101825)}
+.invite-hero-text{padding:14px 2px 20px}
+.invite-group{font-size:31px;line-height:1.13;letter-spacing:-1.2px;margin:10px 0 8px}
+.invite-by{margin:0;color:var(--muted);font-size:14px}
+.invite-card{display:grid;gap:14px}
+.invite-points{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.invite-points li{display:flex;gap:10px;font-size:14px;line-height:1.45}
+.invite-points li::before{content:'✓';color:var(--good);font-weight:800;flex:none}
+.invite-meta{display:flex;gap:8px;flex-wrap:wrap}
+.invite-meta span{background:var(--app-soft);border-radius:99px;padding:5px 11px;font-size:12px;font-weight:750;color:var(--muted)}
+.invite-note{text-align:center}

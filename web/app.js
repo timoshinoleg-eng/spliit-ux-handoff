@@ -145,12 +145,12 @@ function myShare(d,e){
   return shares.find(s=>s.participantId===d.me)?.amount;
  }catch{return undefined;}
 }
-function renderExpenses(d){return d.expenses.length?`<div class="stack">${d.expenses.map(e=>{const payer=d.participants.find(p=>p.id===e.paidById)?.name||'Участник';
+function renderExpenses(d){return d.expenses.length?`<div class="expense-list">${d.expenses.map(e=>{const payer=d.participants.find(p=>p.id===e.paidById)?.name||'Участник';
  const count=(e.paidFor||[]).filter(p=>p.shares>0).length;
  let shareLine='';
  if(e.isReimbursement)shareLine='<small>Возврат долга</small>';
  else{const mine=myShare(d,e);if(mine!==undefined)shareLine=`<small>На ${count} чел. · Ваша доля: ${money(mine,d.group.currencyCode)}</small>`;}
- return `<div class="card expense"><div class="expense-icon">${e.isReimbursement?'⇄':'◈'}</div><div style="flex:1;min-width:0"><strong>${esc(e.title)}</strong><small>${esc(payer)} · ${fmtDate(e.expenseDate)}</small>${shareLine}</div><div class="amount">${money(e.amount,d.group.currencyCode)}${(e.createdByTgId===S.boot?.user?.id||d.isCreator)?`<div><button class="btn small ghost" data-action="${e.isReimbursement?'deleteExpenseDirect':'editExpense'}" data-id="${esc(e.id)}">${e.isReimbursement?'Удалить':'Изменить'}</button></div>`:''}</div></div>`}).join('')}</div>`:'<div class="card empty"><p>Расходов пока нет. Добавьте первый чек — Spleet сразу посчитает доли.</p><button class="btn primary" data-action="expense">Добавить первую трату</button></div>';}
+ return `<div class="expense expense-row"><div class="expense-icon">${e.isReimbursement?'⇄':'◈'}</div><div style="flex:1;min-width:0"><strong>${esc(e.title)}</strong><small>${esc(payer)} · ${fmtDate(e.expenseDate)}</small>${shareLine}</div><div class="amount">${money(e.amount,d.group.currencyCode)}${(e.createdByTgId===S.boot?.user?.id||d.isCreator)?`<div><button class="btn small ghost" data-action="${e.isReimbursement?'deleteExpenseDirect':'editExpense'}" data-id="${esc(e.id)}">${e.isReimbursement?'Удалить':'Изменить'}</button></div>`:''}</div></div>`}).join('')}</div>`:'<div class="card empty"><p>Расходов пока нет. Добавьте первый чек — Spleet сразу посчитает доли.</p><button class="btn primary" data-action="expense">Добавить первую трату</button></div>';}
 function renderBalances(data){
  const transfers=data.settlements||[];
  if(!transfers.length)return '<div class="card empty">Долгов нет. Все расчёты закрыты.</div>';
@@ -288,12 +288,29 @@ function viewJoin(){
  <div id="join-claim" class="field" hidden><label for="join-code">Личный код от организатора</label><input id="join-code" name="claimToken" autocomplete="off"/><p class="form-hint">Попросите у организатора код, чтобы занять своё место и сохранить уже внесённые траты.</p></div>`:''}</section>
  <button type="submit" class="btn primary full">Присоединиться к группе</button></form>`;
 }
+// Demo-only invite screen (?demoInvite=1). Synthetic data only: the group
+// name, the inviter and the "what joining means" list come from the demo
+// bootstrap, not from the server. The mesh-gradient hero is a static CSS
+// background behind the group name (paper-shaders style: cool blue with a
+// light mint tint); everything the user reads or taps sits on solid
+// surfaces. The primary action opens the real join form (viewJoin);
+// "back" dismisses the mockup for the session so it never loops.
+function viewDemoInvite(){
+ const inv=S.invitation||{};
+ const groupName=inv.groupName||'Группа';
+ const inviter=inv.inviterName||'Участник';
+ const n=D.participants.length;
+ return `<div class="mini-nav"><button class="back" data-action="demoInviteDismiss" aria-label="Назад">‹</button><div><h1 class="subheading">Приглашение</h1><div class="subtitle">${esc(groupName)}</div></div></div>
+ <section class="invite-hero-text"><div class="eyebrow">ВАС ПРИГЛАСИЛИ</div><h1 class="invite-group">${esc(groupName)}</h1><p class="invite-by">${esc(inviter)} приглашает вас вести общие расходы вместе.</p></section>
+ <section class="card invite-card"><ul class="invite-points"><li>Видеть все траты группы и кто за что заплатил</li><li>Добавлять свои чеки — доли посчитаются сами, до копейки</li><li>Рассчитываться с участниками по СБП, без лишних переводов</li></ul><div class="invite-meta"><span>${esc(inv.currencyCode||'RUB')}</span><span>${n} ${n===1?'участник':n<5?'участника':'участников'}</span></div><button class="btn primary full" type="button" data-action="join">Присоединиться к группе</button><button class="btn ghost full" type="button" data-action="demoInviteDismiss">Вернуться к своим группам</button></section>
+ <p class="fine invite-note">Вступив, вы увидите историю трат и свой баланс. Выйти из группы можно в любой момент.</p>`;
+}
 function viewPay(){return `${back('Pro для группы','30 дней · 75 Stars')}<div class="hero"><div class="eyebrow" style="color:#d4dcff">ГРУППОВОЙ ПРОПУСК</div><h2>Больше возможностей для всей компании</h2><p>Распознавание фискального QR с суммой чека и курсы валют ЦБ РФ.</p></div><div class="card"><p>Покупка активирует функции для всех участников вашей группы на 30 дней.</p><button class="btn primary full" data-action="pay">Оплатить 75 Stars</button><p class="fine">Фото-OCR пока не подключён. Сканирование QR считывает сумму и фискальные признаки, но не перечень товаров.</p></div>`;}
-function render(){document.body.classList.toggle('spliit-form-open',['expense','create','join','settings'].includes(S.page));let body='';if(S.page==='home')body=viewHome();else if(S.page==='create')body=viewCreate();else if(S.page==='group')body=viewGroup();else if(S.page==='expense')body=viewExpense();else if(S.page==='settings')body=viewSettings();else if(S.page==='invite')body=viewInvite();else if(S.page==='join')body=viewJoin();else if(S.page==='pro')body=viewPay();
+function render(){document.body.classList.toggle('spliit-form-open',['expense','create','join','settings'].includes(S.page));let body='';if(S.page==='home')body=viewHome();else if(S.page==='create')body=viewCreate();else if(S.page==='group')body=viewGroup();else if(S.page==='expense')body=viewExpense();else if(S.page==='settings')body=viewSettings();else if(S.page==='invite')body=viewInvite();else if(S.page==='join')body=viewJoin();else if(S.page==='demoInvite')body=viewDemoInvite();else if(S.page==='pro')body=viewPay();
  const screen=S.page==='group'?`group:${S.groupId}`:S.page;
  const moved=renderedScreen!==screen;
  renderedScreen=screen;
- root.innerHTML=`<main class="page">${header()}${body}</main>${bottom()}${S.notice?`<div role="alert" class="toast ${S.notice.bad?'error':''}">${esc(S.notice.msg)}${S.notice.bad?'<span class="toast-close" aria-hidden="true">✕</span>':''}</div>`:''}`;
+ root.innerHTML=`<main class="page${S.page==='demoInvite'?' invite-screen':''}">${header()}${body}</main>${bottom()}${S.notice?`<div role="alert" class="toast ${S.notice.bad?'error':''}">${esc(S.notice.msg)}${S.notice.bad?'<span class="toast-close" aria-hidden="true">✕</span>':''}</div>`:''}`;
  document.querySelectorAll('button').forEach(x=>x.disabled=!!S.loading);
  window.__spliitEnhancements?.render?.();
  updateExpensePreview();
@@ -303,7 +320,7 @@ function render(){document.body.classList.toggle('spliit-form-open',['expense','
   if(title){title.tabIndex=-1;title.focus({preventScroll:true});}
  }
 }
-async function loadHome(){const start=tg?.initDataUnsafe?.start_param||new URLSearchParams(location.search).get('startapp')||'';S.boot=await call('bootstrap',{startParam:start});S.homeLoadFailed=false;S.invitation=S.boot.invitation;S.inviteUnavailable=start.startsWith('inv_')&&!S.invitation;S.page='home';render();}
+async function loadHome(){const start=tg?.initDataUnsafe?.start_param||new URLSearchParams(location.search).get('startapp')||'';S.boot=await call('bootstrap',{startParam:start});S.homeLoadFailed=false;S.invitation=S.boot.invitation;S.inviteUnavailable=start.startsWith('inv_')&&!S.invitation;S.page=S.invitation?.demoInvite&&!S.demoInviteDismissed&&S.groupId!=='demo'?'demoInvite':'home';render();}
 async function openGroup(id){S.groupId=id;S.group=await call('group_get',{groupId:id});S.saveConfirmed=null;await refreshPending();S.page='group';S.tab=S.entryMode==='settlements'?'balances':'expenses';if(!S.loading)render();}
 function formData(id){return new FormData(document.getElementById(id));}
 function expensePayload(){const f=formData('expense-form'),mode=f.get('splitMode'),ids=f.getAll('participant');if(!ids.length)throw Error('Выберите хотя бы одного участника');const paidFor=ids.map(id=>{let shares=1;if(mode!=='EVENLY'){const raw=String(f.get(`weight_${id}`)||'0').replace(',','.');if(!/^\d+(\.\d{1,2})?$/.test(raw))throw Error('Некорректная доля');shares=mode==='BY_SHARES'?Number(raw):Math.round(Number(raw)*100);}return {participantId:id,shares};});const payload={groupId:S.groupId,expenseId:S.edit?.id||S.newExpenseId,title:String(f.get('title')),amount:amountInt(f.get('amount')),paidById:String(f.get('paidById')),splitMode:mode,paidFor,categoryId:Number(f.get('categoryId')||0),notes:String(f.get('notes')||'')};
@@ -474,6 +491,7 @@ root.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(!
  if(action==='settle'){openSettleModal({to:b.dataset.to,amount:Number(b.dataset.amount),opener:b});return;}
  if(action==='remind'){if(!confirm('Напомнить участнику о долге в личном сообщении Telegram? Не чаще одного раза в 24 часа.'))return;await call('remind_debt',{groupId:S.groupId,debtorId:b.dataset.debtor});toast('Напоминание отправлено');return;}
  if(action==='join'){S.page='join';return;}
+ if(action==='demoInviteDismiss'){S.demoInviteDismissed=true;S.invitation=null;S.page='home';return;}
  if(action==='invite'){S.page='invite';return;}
  if(action==='share'){const link=configLink(S.group.group.inviteToken);if(!link)throw Error('Ссылка не настроена');if(tg?.openTelegramLink)tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(link)}`);else await navigator.clipboard.writeText(link);return;}
  if(action==='settings'){S.page='settings';return;}
@@ -585,6 +603,10 @@ const D={group:{id:'demo',name:'Выходные у моря',currencyCode:'RUB'
 // They make the lost-response and stale-list cases reproducible in the
 // browser demo. Never active outside the demo (demoCall only runs there).
 const demoFailParams=new URLSearchParams(location.search);
+// Demo-only invite mockup (?demoInvite=1): the demo bootstrap returns a
+// synthetic invitation so the invite screen can be shown without Telegram.
+// Real invite/join logic is untouched.
+const demoInvite=demoFailParams.get('demoInvite')==='1';
 let demoFailLostExpense=demoFailParams.get('demoFail')==='lostExpense';
 let demoFailRefreshPending=demoFailParams.get('demoFail')==='refreshFail';
 let demoFailRefreshArmed=false;
@@ -596,7 +618,7 @@ function demoView(){const totals=Object.fromEntries(D.participants.map(x=>[x.id,
  const shares=splitExpense({id:e.id,amount:e.amount,splitMode:e.splitMode,paidFor:e.paidFor});
  for(const s of shares)totals[s.participantId].paidFor+=s.amount;
 }for(const x of Object.values(totals))x.total=x.paid-x.paidFor;const debts=Object.entries(totals).map(([id,v])=>({id,total:v.total})).filter(x=>x.total<0),credits=Object.entries(totals).map(([id,v])=>({id,total:v.total})).filter(x=>x.total>0),transfers=[];for(const debt of debts)for(const credit of credits){const amount=Math.min(-debt.total,credit.total);if(amount>0){transfers.push({from:debt.id,to:credit.id,amount});debt.total+=amount;credit.total-=amount;}}return {group:{...D.group},me:'a',isCreator:true,participants:D.participants,expenses:[...D.expenses].reverse(),balances:totals,settlements:transfers,activities:[]};}
-async function demoCall(name,p){if(name==='bootstrap')return {user:{id:1,name:'Вы'},groups:[{id:D.group.id,name:D.group.name,currencyCode:D.group.currencyCode}],invitation:null,features:{betaFree:true,billingEnabled:false}};if(name==='group_get'){if(demoFailRefreshArmed){demoFailRefreshArmed=false;throw demoNetworkError();}return demoView();}if(name==='group_create'){D.group={id:'demo',name:p.name,currencyCode:p.currencyCode,information:p.information,inviteToken:'demo_inv',proUntil:0};D.participants=[{id:'a',name:'Вы',tgUserId:1},...p.participants.map((name,i)=>({id:'p'+i,name,tgUserId:null,claimToken:'demo'}))];D.expenses=[];return {groupId:'demo'};}if(name==='expense_upsert'){const id=p.expenseId||'exp_'+(''+Math.random()).replace('0.','').padEnd(36,'0');
+async function demoCall(name,p){if(name==='bootstrap')return {user:{id:1,name:'Вы'},groups:[{id:D.group.id,name:D.group.name,currencyCode:D.group.currencyCode}],invitation:demoInvite?{groupName:D.group.name,groupId:'demo',currencyCode:D.group.currencyCode,inviterName:'Анна',alreadyMember:false,demoInvite:true,unclaimed:[]}:null,features:{betaFree:true,billingEnabled:false}};if(name==='group_get'){if(demoFailRefreshArmed){demoFailRefreshArmed=false;throw demoNetworkError();}return demoView();}if(name==='group_create'){D.group={id:'demo',name:p.name,currencyCode:p.currencyCode,information:p.information,inviteToken:'demo_inv',proUntil:0};D.participants=[{id:'a',name:'Вы',tgUserId:1},...p.participants.map((name,i)=>({id:'p'+i,name,tgUserId:null,claimToken:'demo'}))];D.expenses=[];return {groupId:'demo'};}if(name==='expense_upsert'){const id=p.expenseId||'exp_'+(''+Math.random()).replace('0.','').padEnd(36,'0');
   // Validate the split BEFORE touching demo data: invalid manual
   // amounts/percentages are rejected, history and balances stay unchanged.
   splitExpense({id,amount:p.amount,splitMode:p.splitMode,paidFor:p.paidFor});
